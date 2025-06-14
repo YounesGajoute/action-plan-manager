@@ -1,96 +1,96 @@
 # ===================================================================
-# docker-compose.yml - Production Docker Compose Configuration
+# docker-compose.dev.yml - Development Docker Compose Configuration
+# Action Plan Management System
 # ===================================================================
 
 version: '3.8'
 
 services:
   # ===============================
-  # NGINX Reverse Proxy
+  # Frontend Development (React)
   # ===============================
-  nginx:
-    image: nginx:alpine
-    container_name: actionplan_nginx
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - ./ssl:/etc/ssl/certs:ro
-      - ./logs/nginx:/var/log/nginx
-    depends_on:
-      - frontend
-      - api
-    networks:
-      - actionplan-network
-
-  # ===============================
-  # Frontend (React)
-  # ===============================
-  frontend:
+  frontend-dev:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
       args:
-        - NODE_ENV=production
-    container_name: actionplan_frontend
+        - NODE_ENV=development
+    container_name: actionplan_frontend_dev
     restart: unless-stopped
     environment:
-      - NODE_ENV=production
-      - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:5000}
-      - REACT_APP_WS_URL=${REACT_APP_WS_URL:-ws://localhost:5000}
+      - NODE_ENV=development
+      - REACT_APP_API_URL=http://localhost:5000
+      - REACT_APP_WS_URL=ws://localhost:5000
       - REACT_APP_MS_CLIENT_ID=${MS_CLIENT_ID}
       - REACT_APP_MS_TENANT_ID=${MS_TENANT_ID}
       - REACT_APP_MS_AUTHORITY=${MS_AUTHORITY}
-      - REACT_APP_MS_REDIRECT_URI=${REDIRECT_URI_PROD:-http://localhost:3000/auth/callback}
+      - REACT_APP_MS_REDIRECT_URI=http://localhost:3000/auth/callback
+      - FAST_REFRESH=true
+      - CHOKIDAR_USEPOLLING=true
     volumes:
+      - ./frontend:/app
+      - /app/node_modules
       - ./logs/frontend:/app/logs
+    ports:
+      - "3000:3000"
     networks:
-      - actionplan-network
+      - actionplan-dev-network
+    command: npm start
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000"]
       interval: 30s
       timeout: 10s
       retries: 3
+    depends_on:
+      - api-dev
 
   # ===============================
-  # Backend API (Flask)
+  # Backend Development (Flask)
   # ===============================
-  api:
+  api-dev:
     build:
       context: ./backend
-      dockerfile: Dockerfile
-    container_name: actionplan_api
+      dockerfile: Dockerfile.dev
+    container_name: actionplan_api_dev
     restart: unless-stopped
     environment:
-      - FLASK_ENV=production
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      - REDIS_URL=redis://cache:6379
-      - JWT_SECRET=${JWT_SECRET}
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-actionplan}:${POSTGRES_PASSWORD:-secure_password}@db-dev:5432/${POSTGRES_DB:-actionplan}
+      - REDIS_URL=redis://cache-dev:6379/0
+      - JWT_SECRET=${JWT_SECRET:-dev-jwt-secret}
+      - SECRET_KEY=${SECRET_KEY:-dev-flask-secret}
+      # Microsoft 365 Configuration
       - MS_CLIENT_ID=${MS_CLIENT_ID}
       - MS_CLIENT_SECRET=${MS_CLIENT_SECRET}
       - MS_TENANT_ID=${MS_TENANT_ID}
-      - SMTP_SERVER=${SMTP_SERVER}
-      - SMTP_PORT=${SMTP_PORT}
+      - MS_AUTHORITY=${MS_AUTHORITY}
+      # Email Configuration (Development)
+      - SMTP_SERVER=${SMTP_SERVER:-smtp.office365.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
       - SMTP_USER=${SMTP_USER}
       - SMTP_PASSWORD=${SMTP_PASSWORD}
-      - ENABLE_ONEDRIVE_SYNC=${ENABLE_ONEDRIVE_SYNC:-true}
-      - ENABLE_EMAIL_NOTIFICATIONS=${ENABLE_EMAIL_NOTIFICATIONS:-true}
-      - ONEDRIVE_FOLDER_PATH=${ONEDRIVE_FOLDER_PATH:-/Action Plans}
-      - ONEDRIVE_FILE_NAME=${ONEDRIVE_FILE_NAME:-Plan_daction.xlsx}
-      - SYNC_INTERVAL=${SYNC_INTERVAL:-300}
+      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS:-dev@techmac.ma}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-Action Plan Dev}
+      # Development Features
+      - ENABLE_ONEDRIVE_SYNC=${ENABLE_ONEDRIVE_SYNC:-false}
+      - ENABLE_EMAIL_NOTIFICATIONS=${ENABLE_EMAIL_NOTIFICATIONS:-false}
+      - ENABLE_TELEGRAM_BOT=${ENABLE_TELEGRAM_BOT:-false}
+      - SQLALCHEMY_ECHO=true
     volumes:
+      - ./backend:/app
       - ./data:/app/data
       - ./uploads:/app/uploads
       - ./logs/api:/app/logs
-      - ./backups:/app/backups
+    ports:
+      - "5000:5000"
+      - "5678:5678"  # Python debugger port
     depends_on:
-      - db
-      - cache
+      - db-dev
+      - cache-dev
     networks:
-      - actionplan-network
+      - actionplan-dev-network
+    command: python app.py
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
@@ -98,11 +98,11 @@ services:
       retries: 3
 
   # ===============================
-  # PostgreSQL Database
+  # PostgreSQL Development Database
   # ===============================
-  db:
+  db-dev:
     image: postgres:15-alpine
-    container_name: actionplan_db
+    container_name: actionplan_db_dev
     restart: unless-stopped
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-actionplan}
@@ -110,41 +110,39 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-secure_password}
       - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_dev_data:/var/lib/postgresql/data
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
       - ./backups/database:/backups
       - ./logs/postgres:/var/log/postgresql
     ports:
-      - "5432:5432"  # Expose for development access
+      - "5433:5432"  # Different port for dev
     networks:
-      - actionplan-network
+      - actionplan-dev-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-actionplan} -d ${POSTGRES_DB:-actionplan}"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
 
   # ===============================
-  # Redis Cache
+  # Redis Development Cache
   # ===============================
-  cache:
+  cache-dev:
     image: redis:7-alpine
-    container_name: actionplan_cache
+    container_name: actionplan_cache_dev
     restart: unless-stopped
     command: >
-      --requirepass ${REDIS_PASSWORD:-Gajoute1992}
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-dev_password}
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
-      --save 900 1
-      --save 300 10
-      --save 60 10000
     volumes:
-      - redis_data:/data
+      - redis_dev_data:/data
       - ./logs/redis:/var/log/redis
     ports:
-      - "6379:6379"  # Expose for development access
+      - "6380:6379"  # Different port for dev
     networks:
-      - actionplan-network
+      - actionplan-dev-network
     healthcheck:
       test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
       interval: 30s
@@ -152,226 +150,122 @@ services:
       retries: 3
 
   # ===============================
-  # OneDrive Sync Service
+  # MailHog (Development Email Testing)
   # ===============================
-  onedrive-sync:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: actionplan_onedrive_sync
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: actionplan_mailhog
     restart: unless-stopped
-    command: python -m app.services.onedrive_scheduler
-    environment:
-      - FLASK_ENV=production
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      - REDIS_URL=redis://cache:6379
-      - MS_CLIENT_ID=${MS_CLIENT_ID}
-      - MS_CLIENT_SECRET=${MS_CLIENT_SECRET}
-      - MS_TENANT_ID=${MS_TENANT_ID}
-      - ONEDRIVE_FOLDER_PATH=${ONEDRIVE_FOLDER_PATH:-/Action Plans}
-      - ONEDRIVE_FILE_NAME=${ONEDRIVE_FILE_NAME:-Plan_daction.xlsx}
-      - SYNC_INTERVAL=${SYNC_INTERVAL:-300}
-    volumes:
-      - ./data:/app/data
-      - ./logs/sync:/app/logs
-    depends_on:
-      - db
-      - cache
+    ports:
+      - "1025:1025"  # SMTP port
+      - "8025:8025"  # Web UI port
     networks:
-      - actionplan-network
-    profiles:
-      - onedrive-sync
+      - actionplan-dev-network
 
   # ===============================
-  # Email Service
+  # Redis Commander (Development Redis UI)
   # ===============================
-  email-service:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: actionplan_email
-    restart: unless-stopped
-    command: python -m app.services.email_scheduler
-    environment:
-      - FLASK_ENV=production
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      - REDIS_URL=redis://cache:6379
-      - SMTP_SERVER=${SMTP_SERVER}
-      - SMTP_PORT=${SMTP_PORT}
-      - SMTP_USER=${SMTP_USER}
-      - SMTP_PASSWORD=${SMTP_PASSWORD}
-      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS:-noreply@techmac.ma}
-      - ENABLE_EMAIL_NOTIFICATIONS=${ENABLE_EMAIL_NOTIFICATIONS:-true}
-      - DEADLINE_WARNING_DAYS=${DEADLINE_WARNING_DAYS:-3}
-    volumes:
-      - ./logs/email:/app/logs
-    depends_on:
-      - db
-      - cache
-    networks:
-      - actionplan-network
-    profiles:
-      - email-service
-
-  # ===============================
-  # Telegram Bot (Optional)
-  # ===============================
-  telegram-bot:
-    build:
-      context: ./telegram-bot
-      dockerfile: Dockerfile
-    container_name: actionplan_telegram
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: actionplan_redis_commander
     restart: unless-stopped
     environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - API_BASE_URL=http://api:5000
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-    volumes:
-      - ./logs/telegram:/app/logs
+      - REDIS_HOSTS=local:cache-dev:6379:0:${REDIS_PASSWORD:-dev_password}
+    ports:
+      - "8081:8081"
     depends_on:
-      - api
+      - cache-dev
     networks:
-      - actionplan-network
-    profiles:
-      - telegram-bot
+      - actionplan-dev-network
 
   # ===============================
-  # Backup Service
+  # pgAdmin (Development Database UI)
   # ===============================
-  backup-service:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: actionplan_backup
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: actionplan_pgadmin
     restart: unless-stopped
-    command: python -m app.services.backup_scheduler
     environment:
-      - FLASK_ENV=production
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      - BACKUP_SCHEDULE=${BACKUP_SCHEDULE:-0 2 * * *}
-      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}
-      - BACKUP_S3_BUCKET=${BACKUP_S3_BUCKET}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL:-admin@techmac.ma}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:-admin123}
+      - PGADMIN_CONFIG_SERVER_MODE=False
+      - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False
     volumes:
-      - ./backups:/app/backups
-      - ./data:/app/data:ro
-      - ./logs/backup:/app/logs
+      - pgadmin_data:/var/lib/pgadmin
+      - ./monitoring/pgadmin/servers.json:/pgadmin4/servers.json:ro
+    ports:
+      - "8080:80"
     depends_on:
-      - db
+      - db-dev
     networks:
-      - actionplan-network
-    profiles:
-      - backup-service
+      - actionplan-dev-network
 
   # ===============================
-  # Monitoring - Prometheus
+  # Prometheus (Development Monitoring)
   # ===============================
-  prometheus:
+  prometheus-dev:
     image: prom/prometheus:latest
-    container_name: actionplan_prometheus
+    container_name: actionplan_prometheus_dev
     restart: unless-stopped
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
       - '--web.console.libraries=/etc/prometheus/console_libraries'
       - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=200h'
+      - '--storage.tsdb.retention.time=72h'
       - '--web.enable-lifecycle'
     volumes:
-      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./monitoring/prometheus/rules:/etc/prometheus/rules:ro
-      - prometheus_data:/prometheus
+      - ./monitoring/prometheus/prometheus.dev.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_dev_data:/prometheus
     ports:
-      - "9090:9090"
+      - "9091:9090"
     networks:
-      - actionplan-network
-    profiles:
-      - monitoring
+      - actionplan-dev-network
 
   # ===============================
-  # Monitoring - Grafana
+  # Grafana (Development Monitoring)
   # ===============================
-  grafana:
+  grafana-dev:
     image: grafana/grafana:latest
-    container_name: actionplan_grafana
+    container_name: actionplan_grafana_dev
     restart: unless-stopped
     environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
-      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
+      - GF_USERS_ALLOW_SIGN_UP=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
     volumes:
-      - grafana_data:/var/lib/grafana
+      - grafana_dev_data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "3001:3000"
     depends_on:
-      - prometheus
+      - prometheus-dev
     networks:
-      - actionplan-network
-    profiles:
-      - monitoring
-
-  # ===============================
-  # Log Management - Elasticsearch (Optional)
-  # ===============================
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.10.0
-    container_name: actionplan_elasticsearch
-    restart: unless-stopped
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-    volumes:
-      - elasticsearch_data:/usr/share/elasticsearch/data
-    ports:
-      - "9200:9200"
-    networks:
-      - actionplan-network
-    profiles:
-      - logging
-
-  # ===============================
-  # Log Management - Kibana (Optional)
-  # ===============================
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.10.0
-    container_name: actionplan_kibana
-    restart: unless-stopped
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-    ports:
-      - "5601:5601"
-    depends_on:
-      - elasticsearch
-    networks:
-      - actionplan-network
-    profiles:
-      - logging
-
-# ===============================
-# NETWORKS
-# ===============================
-networks:
-  actionplan-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
+      - actionplan-dev-network
 
 # ===============================
 # VOLUMES
 # ===============================
 volumes:
-  postgres_data:
+  postgres_dev_data:
     driver: local
-  redis_data:
+  redis_dev_data:
     driver: local
-  grafana_data:
+  prometheus_dev_data:
     driver: local
-  prometheus_data:
+  grafana_dev_data:
     driver: local
-  elasticsearch_data:
+  pgadmin_data:
     driver: local
+
+# ===============================
+# NETWORKS
+# ===============================
+networks:
+  actionplan-dev-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
