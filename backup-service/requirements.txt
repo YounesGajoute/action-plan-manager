@@ -1,0 +1,59 @@
+# ===================================================================
+# requirements.txt - Python Dependencies for Backup Service
+# ===================================================================
+
+# Core dependencies
+schedule==1.2.0              # Job scheduling for automated backups
+redis==5.0.1                 # Redis client for status tracking
+psycopg2-binary==2.9.9       # PostgreSQL adapter
+
+# AWS S3 integration
+boto3==1.34.0                # AWS SDK for Python
+botocore==1.34.0             # Low-level interface to AWS services
+
+# Database utilities
+sqlparse==0.4.4              # SQL parsing utilities
+
+# Compression and archiving
+tarfile                      # Built-in Python module (no install needed)
+gzip                         # Built-in Python module (no install needed)
+
+# System utilities
+pathlib                      # Built-in Python module (no install needed)
+subprocess                   # Built-in Python module (no install needed)
+shutil                       # Built-in Python module (no install needed)
+
+# Email notifications
+smtplib                      # Built-in Python module (no install needed)
+email                        # Built-in Python module (no install needed)
+
+# Data processing and utilities
+python-dateutil==2.8.2      # Extended date/time handling
+pytz==2023.3                 # Timezone handling
+requests==2.31.0             # HTTP library
+
+# Configuration and environment
+python-dotenv==1.0.0         # Load environment variables from .env files
+
+# Logging and monitoring
+structlog==23.2.0            # Structured logging
+colorama==0.4.6              # Colored terminal output
+
+# File handling and validation
+filetype==1.2.0              # File type detection
+magic==0.4.27                # File type identification
+
+# Development and testing (optional)
+pytest==7.4.3               # Testing framework
+pytest-cov==4.1.0           # Coverage testing
+pytest-mock==3.12.0         # Mocking for tests
+
+# Security
+cryptography==41.0.7        # Cryptographic recipes and primitives
+
+# Performance monitoring
+psutil==5.9.6                # System and process utilities
+
+# Additional utilities
+click==8.1.7                 # Command line interface creation toolkit
+tqdm==4.66.1                 # Progress bars for long-running operations
