@@ -1,0 +1,89 @@
+# ===================================================================
+# backend/Dockerfile.dev - Development Backend Container
+# ===================================================================
+
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONHASHSEED=random \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    FLASK_ENV=development \
+    FLASK_DEBUG=1
+
+# Set work directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    postgresql-client \
+    curl \
+    wget \
+    gcc \
+    g++ \
+    git \
+    vim \
+    # Development tools
+    htop \
+    procps \
+    # Excel processing
+    libxml2-dev \
+    libxslt1-dev \
+    zlib1g-dev \
+    # Image processing
+    libjpeg-dev \
+    libpng-dev \
+    # Cryptography
+    libffi-dev \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create application user
+RUN groupadd -r appuser && \
+    useradd -r -g appuser -d /app -s /bin/bash appuser && \
+    chown -R appuser:appuser /app
+
+# Copy requirements first for better Docker layer caching
+COPY requirements.txt .
+COPY requirements-dev.txt .
+
+# Install Python dependencies
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install -r requirements.txt && \
+    pip install -r requirements-dev.txt
+
+# Install development tools
+RUN pip install \
+    debugpy==1.8.0 \
+    ipython==8.18.1 \
+    ipdb==0.13.13 \
+    flask-shell-ipython==1.4.0
+
+# Copy application code
+COPY . .
+
+# Create necessary directories
+RUN mkdir -p /app/logs /app/uploads /app/data /app/backups /app/static && \
+    chown -R appuser:appuser /app
+
+# Copy and set up scripts
+COPY scripts/ /app/scripts/
+RUN chmod +x /app/scripts/*.py
+
+# Switch to non-root user
+USER appuser
+
+# Expose ports
+EXPOSE 5000 5678
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:5000/health || exit 1
+
+# Start development server with debugger
+CMD ["python", "-m", "debugpy", "--wait-for-client", "--listen", "0.0.0.0:5678", "app.py"]
