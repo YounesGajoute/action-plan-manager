@@ -1,0 +1,53 @@
+# ===================================================================
+# frontend/Dockerfile.dev - Development Frontend Container
+# ===================================================================
+
+FROM node:18-alpine
+
+# Set environment variables
+ENV NODE_ENV=development \
+    CHOKIDAR_USEPOLLING=true \
+    FAST_REFRESH=true
+
+# Set work directory
+WORKDIR /app
+
+# Install system dependencies for development
+RUN apk add --no-cache \
+    git \
+    python3 \
+    make \
+    g++ \
+    curl
+
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S reactuser -u 1001 -G nodejs
+
+# Copy package files
+COPY package*.json ./
+
+# Install all dependencies (including dev dependencies)
+RUN npm install && npm cache clean --force
+
+# Copy source code
+COPY . .
+
+# Change ownership to non-root user
+RUN chown -R reactuser:nodejs /app
+
+# Switch to non-root user
+USER reactuser
+
+# Create logs directory
+RUN mkdir -p logs
+
+# Expose port
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3000 || exit 1
+
+# Start development server
+CMD ["npm", "start"]
