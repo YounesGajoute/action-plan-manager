@@ -1,901 +1,756 @@
+#!/usr/bin/env python3
 # ===================================================================
-# backend/services/email_service.py - Email Notification Service
+# backend/services/email_service.py - Complete Email Service
 # ===================================================================
 
 import os
 import logging
 import smtplib
+import json
+import hashlib
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional, Any, Union
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+import redis
+from celery import Celery
 from flask import current_app, render_template_string
-import requests
+import threading
+from dataclasses import dataclass, asdict
+from enum import Enum
 
-from app.models import User, Task, Notification
+from app.models import EmailLog, Task, User, EmailTemplate, EmailQueue
 from app import db
 
 logger = logging.getLogger(__name__)
 
-class EmailService:
-    """Service for sending email notifications"""
+class EmailPriority(Enum):
+    LOW = 1
+    NORMAL = 2
+    HIGH = 3
+    URGENT = 4
+
+class EmailStatus(Enum):
+    QUEUED = "queued"
+    SENDING = "sending"
+    SENT = "sent"
+    FAILED = "failed"
+    BOUNCED = "bounced"
+    DELIVERED = "delivered"
+
+@dataclass
+class EmailMessage:
+    to: Union[str, List[str]]
+    subject: str
+    template: str
+    context: Dict[str, Any]
+    from_email: Optional[str] = None
+    cc: Optional[List[str]] = None
+    bcc: Optional[List[str]] = None
+    attachments: Optional[List[Dict]] = None
+    priority: EmailPriority = EmailPriority.NORMAL
+    send_at: Optional[datetime] = None
+    user_id: Optional[str] = None
+    task_id: Optional[str] = None
+    email_type: str = "notification"
+
+class EmailTemplateEngine:
+    """Enhanced template engine for email rendering"""
     
     def __init__(self):
-        self.smtp_server = current_app.config.get('MAIL_SERVER', 'smtp.office365.com')
-        self.smtp_port = current_app.config.get('MAIL_PORT', 587)
-        self.smtp_user = current_app.config.get('MAIL_USERNAME')
-        self.smtp_password = current_app.config.get('MAIL_PASSWORD')
-        self.use_tls = current_app.config.get('MAIL_USE_TLS', True)
-        self.from_address = current_app.config.get('MAIL_DEFAULT_SENDER', 'noreply@techmac.ma')
-        self.from_name = current_app.config.get('EMAIL_FROM_NAME', 'Action Plan Management System')
+        self.template_dir = current_app.config.get('EMAIL_TEMPLATE_DIR', 'email-service/templates')
+        self.env = Environment(
+            loader=FileSystemLoader(self.template_dir),
+            autoescape=select_autoescape(['html', 'xml'])
+        )
         
-        # Microsoft Graph API settings
-        self.use_graph_api = current_app.config.get('EMAIL_GRAPH_ENABLED', False)
-        self.ms_client_id = current_app.config.get('MS_CLIENT_ID')
-        self.ms_client_secret = current_app.config.get('MS_CLIENT_SECRET')
-        self.ms_tenant_id = current_app.config.get('MS_TENANT_ID')
-    
-    def send_email(self, to_email: str, subject: str, html_body: str, text_body: str = None, attachments: List[Dict] = None) -> bool:
-        """Send email using SMTP or Microsoft Graph API"""
+        # Add custom filters
+        self.env.filters['datetime_format'] = self._datetime_format
+        self.env.filters['currency'] = self._currency_format
+        self.env.filters['truncate_words'] = self._truncate_words
+        
+    def _datetime_format(self, value: datetime, format_string: str = '%d/%m/%Y %H:%M') -> str:
+        """Format datetime for display"""
+        if isinstance(value, str):
+            value = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        return value.strftime(format_string)
+        
+    def _currency_format(self, value: float, currency: str = 'MAD') -> str:
+        """Format currency values"""
+        return f"{value:,.2f} {currency}"
+        
+    def _truncate_words(self, text: str, length: int = 50) -> str:
+        """Truncate text to specified word count"""
+        words = str(text).split()
+        if len(words) <= length:
+            return text
+        return ' '.join(words[:length]) + '...'
+        
+    def render_template(self, template_name: str, context: Dict[str, Any]) -> Dict[str, str]:
+        """Render email template with context"""
         try:
-            if self.use_graph_api and self.ms_client_id:
-                return self._send_via_graph_api(to_email, subject, html_body, text_body, attachments)
-            else:
-                return self._send_via_smtp(to_email, subject, html_body, text_body, attachments)
-        except Exception as e:
-            logger.error(f"Error sending email to {to_email}: {str(e)}")
-            return False
-    
-    def _send_via_smtp(self, to_email: str, subject: str, html_body: str, text_body: str = None, attachments: List[Dict] = None) -> bool:
-        """Send email via SMTP"""
-        try:
-            # Create message
-            msg = MIMEMultipart('alternative')
-            msg['From'] = f"{self.from_name} <{self.from_address}>"
-            msg['To'] = to_email
-            msg['Subject'] = subject
+            # Load template
+            template = self.env.get_template(template_name)
             
-            # Add text part
-            if text_body:
-                text_part = MIMEText(text_body, 'plain', 'utf-8')
-                msg.attach(text_part)
+            # Add common context variables
+            enhanced_context = {
+                **context,
+                'current_date': datetime.now(),
+                'app_name': current_app.config.get('APP_NAME', 'Action Plan Manager'),
+                'company_name': current_app.config.get('COMPANY_NAME', 'TechMac'),
+                'support_email': current_app.config.get('SUPPORT_EMAIL', 'support@techmac.ma'),
+                'app_url': current_app.config.get('APP_URL', 'http://localhost:3000')
+            }
             
-            # Add HTML part
-            html_part = MIMEText(html_body, 'html', 'utf-8')
-            msg.attach(html_part)
+            # Render template
+            content = template.render(**enhanced_context)
             
-            # Add attachments
-            if attachments:
-                for attachment in attachments:
-                    with open(attachment['path'], 'rb') as f:
-                        part = MIMEBase('application', 'octet-stream')
-                        part.set_payload(f.read())
-                        encoders.encode_base64(part)
-                        part.add_header(
-                            'Content-Disposition',
-                            f'attachment; filename= {attachment["name"]}'
-                        )
-                        msg.attach(part)
-            
-            # Send email
-            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
-                if self.use_tls:
-                    server.starttls()
-                
-                if self.smtp_user and self.smtp_password:
-                    server.login(self.smtp_user, self.smtp_password)
-                
-                server.send_message(msg)
-            
-            logger.info(f"Email sent successfully to {to_email}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error sending email via SMTP to {to_email}: {str(e)}")
-            return False
-    
-    def _send_via_graph_api(self, to_email: str, subject: str, html_body: str, text_body: str = None, attachments: List[Dict] = None) -> bool:
-        """Send email via Microsoft Graph API"""
-        try:
-            # Get access token
-            token = self._get_graph_access_token()
-            if not token:
-                logger.error("Failed to get access token for Graph API")
-                return False
-            
-            # Prepare email message
-            message = {
-                "message": {
-                    "subject": subject,
-                    "body": {
-                        "contentType": "HTML",
-                        "content": html_body
-                    },
-                    "toRecipients": [
-                        {
-                            "emailAddress": {
-                                "address": to_email
-                            }
-                        }
-                    ],
-                    "from": {
-                        "emailAddress": {
-                            "address": self.from_address,
-                            "name": self.from_name
-                        }
-                    }
+            # Split HTML and text versions if template supports it
+            if '<!-- TEXT_VERSION -->' in content:
+                parts = content.split('<!-- TEXT_VERSION -->')
+                return {
+                    'html': parts[0].strip(),
+                    'text': parts[1].strip() if len(parts) > 1 else None
                 }
-            }
-            
-            # Add attachments if any
-            if attachments:
-                message["message"]["attachments"] = []
-                for attachment in attachments:
-                    with open(attachment['path'], 'rb') as f:
-                        import base64
-                        content = base64.b64encode(f.read()).decode('utf-8')
-                        
-                        message["message"]["attachments"].append({
-                            "@odata.type": "#microsoft.graph.fileAttachment",
-                            "name": attachment["name"],
-                            "contentType": attachment.get("content_type", "application/octet-stream"),
-                            "contentBytes": content
-                        })
-            
-            # Send email
-            headers = {
-                'Authorization': f'Bearer {token}',
-                'Content-Type': 'application/json'
-            }
-            
-            response = requests.post(
-                f'https://graph.microsoft.com/v1.0/users/{self.from_address}/sendMail',
-                headers=headers,
-                json=message
-            )
-            
-            if response.status_code == 202:
-                logger.info(f"Email sent successfully via Graph API to {to_email}")
-                return True
             else:
-                logger.error(f"Failed to send email via Graph API: {response.status_code} - {response.text}")
-                return False
+                return {
+                    'html': content,
+                    'text': None
+                }
                 
         except Exception as e:
-            logger.error(f"Error sending email via Graph API to {to_email}: {str(e)}")
-            return False
+            logger.error(f"Template rendering error: {str(e)}")
+            raise Exception(f"Failed to render template {template_name}: {str(e)}")
+
+class EmailDeliveryService:
+    """Handle email delivery with multiple providers and retry logic"""
     
-    def _get_graph_access_token(self) -> Optional[str]:
-        """Get access token for Microsoft Graph API"""
-        try:
-            import msal
-            
-            app = msal.ConfidentialClientApplication(
-                client_id=self.ms_client_id,
-                client_credential=self.ms_client_secret,
-                authority=f"https://login.microsoftonline.com/{self.ms_tenant_id}"
-            )
-            
-            result = app.acquire_token_for_client(scopes=['https://graph.microsoft.com/.default'])
-            
-            if 'access_token' in result:
-                return result['access_token']
-            else:
-                logger.error(f"Failed to acquire token: {result.get('error_description', 'Unknown error')}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error getting Graph access token: {str(e)}")
-            return None
-    
-    def send_task_notification(self, task: Task, notification_type: str, users: List[User]) -> bool:
-        """Send task-related notification to users"""
-        try:
-            # Generate email content based on notification type
-            subject, html_body, text_body = self._generate_task_email_content(task, notification_type)
-            
-            success_count = 0
-            for user in users:
-                if user.email:
-                    # Personalize the email
-                    personalized_html = html_body.replace('{{user_name}}', user.name)
-                    personalized_text = text_body.replace('{{user_name}}', user.name) if text_body else None
-                    
-                    if self.send_email(user.email, subject, personalized_html, personalized_text):
-                        success_count += 1
-                        
-                        # Create notification record
-                        notification = Notification(
-                            user_id=user.id,
-                            title=subject,
-                            message=f"Email sent: {notification_type}",
-                            type='info',
-                            task_id=task.id
-                        )
-                        db.session.add(notification)
-            
-            db.session.commit()
-            
-            logger.info(f"Task notification sent to {success_count}/{len(users)} users for task {task.id}")
-            return success_count > 0
-            
-        except Exception as e:
-            logger.error(f"Error sending task notification: {str(e)}")
-            return False
-    
-    def _generate_task_email_content(self, task: Task, notification_type: str) -> tuple:
-        """Generate email content for task notifications"""
-        
-        base_url = current_app.config.get('FRONTEND_URL', 'http://localhost:3000')
-        task_url = f"{base_url}/tasks/{task.id}"
-        
-        # Common variables
-        context = {
-            'task': task,
-            'task_url': task_url,
-            'base_url': base_url,
-            'company_name': 'TechMac',
-            'current_year': datetime.now().year
+    def __init__(self):
+        self.smtp_config = {
+            'server': current_app.config.get('SMTP_SERVER', 'smtp.office365.com'),
+            'port': int(current_app.config.get('SMTP_PORT', 587)),
+            'username': current_app.config.get('SMTP_USER'),
+            'password': current_app.config.get('SMTP_PASSWORD'),
+            'use_tls': current_app.config.get('SMTP_USE_TLS', True),
+            'use_ssl': current_app.config.get('SMTP_USE_SSL', False)
         }
         
-        if notification_type == 'task_assigned':
-            subject = f"Nouvelle tâche assignée: {task.action_description[:50]}..."
-            html_body = self._render_task_assigned_template(context)
-            text_body = f"""
-Bonjour {{{{user_name}}}},
-
-Une nouvelle tâche vous a été assignée:
-
-Tâche: {task.action_description}
-Client: {task.customer}
-Échéance: {task.deadline.strftime('%d/%m/%Y') if task.deadline else 'Non définie'}
-Priorité: {task.priority}
-
-Voir la tâche: {task_url}
-
-Cordialement,
-L'équipe TechMac
-            """.strip()
-            
-        elif notification_type == 'deadline_reminder':
-            days_remaining = (task.deadline - datetime.utcnow()).days if task.deadline else 0
-            subject = f"Rappel d'échéance: {task.action_description[:50]}... ({days_remaining} jours)"
-            html_body = self._render_deadline_reminder_template(context, days_remaining)
-            text_body = f"""
-Bonjour {{{{user_name}}}},
-
-Rappel: La tâche suivante arrive à échéance dans {days_remaining} jour(s):
-
-Tâche: {task.action_description}
-Client: {task.customer}
-Échéance: {task.deadline.strftime('%d/%m/%Y') if task.deadline else 'Non définie'}
-Statut: {task.status}
-
-Voir la tâche: {task_url}
-
-Cordialement,
-L'équipe TechMac
-            """.strip()
-            
-        elif notification_type == 'task_overdue':
-            days_overdue = (datetime.utcnow() - task.deadline).days if task.deadline else 0
-            subject = f"Tâche en retard: {task.action_description[:50]}... ({days_overdue} jours de retard)"
-            html_body = self._render_task_overdue_template(context, days_overdue)
-            text_body = f"""
-Bonjour {{{{user_name}}}},
-
-URGENT: La tâche suivante est en retard de {days_overdue} jour(s):
-
-Tâche: {task.action_description}
-Client: {task.customer}
-Échéance: {task.deadline.strftime('%d/%m/%Y') if task.deadline else 'Non définie'}
-Statut: {task.status}
-
-Action requise immédiatement: {task_url}
-
-Cordialement,
-L'équipe TechMac
-            """.strip()
-            
-        elif notification_type == 'task_completed':
-            subject = f"Tâche terminée: {task.action_description[:50]}..."
-            html_body = self._render_task_completed_template(context)
-            text_body = f"""
-Bonjour {{{{user_name}}}},
-
-La tâche suivante a été marquée comme terminée:
-
-Tâche: {task.action_description}
-Client: {task.customer}
-Responsable: {task.responsible}
-
-Voir la tâche: {task_url}
-
-Cordialement,
-L'équipe TechMac
-            """.strip()
-            
-        else:
-            subject = f"Mise à jour de tâche: {task.action_description[:50]}..."
-            html_body = self._render_task_update_template(context)
-            text_body = f"""
-Bonjour {{{{user_name}}}},
-
-Une tâche a été mise à jour:
-
-Tâche: {task.action_description}
-Client: {task.customer}
-Statut: {task.status}
-
-Voir la tâche: {task_url}
-
-Cordialement,
-L'équipe TechMac
-            """.strip()
+        self.default_from = current_app.config.get('DEFAULT_FROM_EMAIL', 'noreply@techmac.ma')
+        self.max_retries = int(current_app.config.get('EMAIL_MAX_RETRIES', 3))
+        self.retry_delay = int(current_app.config.get('EMAIL_RETRY_DELAY', 300))  # 5 minutes
         
-        return subject, html_body, text_body
-    
-    def _render_task_assigned_template(self, context: Dict) -> str:
-        """Render task assigned email template"""
-        template = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nouvelle tâche assignée</title>
-    <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: linear-gradient(135deg, #1976d2, #dc004e); color: white; padding: 20px; text-align: center; }
-        .content { background: #f9f9f9; padding: 20px; }
-        .task-details { background: white; border-left: 4px solid #1976d2; padding: 15px; margin: 15px 0; }
-        .button { display: inline-block; background: #1976d2; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin: 10px 0; }
-        .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>⏰ Rappel d'Échéance</h1>
-            <p>Système de Gestion des Plans d'Action</p>
-        </div>
+    def send_email(self, message: EmailMessage) -> Dict[str, Any]:
+        """Send email with retry logic and error handling"""
+        start_time = datetime.utcnow()
         
-        <div class="content">
-            <h2>Bonjour {{user_name}},</h2>
-            <p>Une tâche qui vous est assignée arrive bientôt à échéance.</p>
-            
-            <div class="countdown">
-                {{ days_remaining }} jour{{ 's' if days_remaining > 1 else '' }} restant{{ 's' if days_remaining > 1 else '' }}
-            </div>
-            
-            <div class="task-details {{ urgency_class }}">
-                <h3>Détails de la tâche</h3>
-                <p><strong>Description:</strong> {{ task.action_description }}</p>
-                <p><strong>Client:</strong> {{ task.customer }}</p>
-                <p><strong>Statut:</strong> {{ task.status }}</p>
-                {% if task.deadline %}
-                <p><strong>Échéance:</strong> {{ task.deadline.strftime('%d/%m/%Y') }}</p>
-                {% endif %}
-                <p><strong>Priorité:</strong> {{ task.priority or 'Moyen' }}</p>
-            </div>
-            
-            <p>Veuillez prendre les mesures nécessaires pour respecter l'échéance.</p>
-            
-            <a href="{{ task_url }}" class="button">Voir la Tâche</a>
-        </div>
-        
-        <div class="footer">
-            <p>© {{ current_year }} {{ company_name }}. Tous droits réservés.</p>
-            <p>Ceci est un email automatique, merci de ne pas répondre.</p>
-        </div>
-    </div>
-</body>
-</html>
-        """
-        
-        return render_template_string(template, **context)
-    
-    def _render_task_overdue_template(self, context: Dict, days_overdue: int) -> str:
-        """Render task overdue email template"""
-        context['days_overdue'] = days_overdue
-        
-        template = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tâche en retard</title>
-    <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: linear-gradient(135deg, #f44336, #d32f2f); color: white; padding: 20px; text-align: center; }
-        .content { background: #f9f9f9; padding: 20px; }
-        .task-details { background: white; border-left: 4px solid #f44336; padding: 15px; margin: 15px 0; }
-        .overdue-alert { background: #ffebee; border: 1px solid #f44336; color: #c62828; padding: 15px; margin: 15px 0; border-radius: 5px; text-align: center; }
-        .button { display: inline-block; background: #f44336; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin: 10px 0; }
-        .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🚨 Tâche en Retard</h1>
-            <p>Action Urgente Requise</p>
-        </div>
-        
-        <div class="content">
-            <h2>Bonjour {{user_name}},</h2>
-            
-            <div class="overdue-alert">
-                <strong>URGENT:</strong> Cette tâche est en retard de {{ days_overdue }} jour{{ 's' if days_overdue > 1 else '' }}
-            </div>
-            
-            <div class="task-details">
-                <h3>Détails de la tâche</h3>
-                <p><strong>Description:</strong> {{ task.action_description }}</p>
-                <p><strong>Client:</strong> {{ task.customer }}</p>
-                <p><strong>Statut:</strong> {{ task.status }}</p>
-                {% if task.deadline %}
-                <p><strong>Échéance:</strong> {{ task.deadline.strftime('%d/%m/%Y') }}</p>
-                {% endif %}
-                <p><strong>Responsable:</strong> {{ task.responsible }}</p>
-            </div>
-            
-            <p>Cette tâche nécessite une attention immédiate. Veuillez mettre à jour le statut ou contacter votre manager.</p>
-            
-            <a href="{{ task_url }}" class="button">Action Immédiate Requise</a>
-        </div>
-        
-        <div class="footer">
-            <p>© {{ current_year }} {{ company_name }}. Tous droits réservés.</p>
-            <p>Ceci est un email automatique, merci de ne pas répondre.</p>
-        </div>
-    </div>
-</body>
-</html>
-        """
-        
-        return render_template_string(template, **context)
-    
-    def _render_task_completed_template(self, context: Dict) -> str:
-        """Render task completed email template"""
-        template = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tâche terminée</title>
-    <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: linear-gradient(135deg, #4caf50, #2e7d32); color: white; padding: 20px; text-align: center; }
-        .content { background: #f9f9f9; padding: 20px; }
-        .task-details { background: white; border-left: 4px solid #4caf50; padding: 15px; margin: 15px 0; }
-        .success-icon { text-align: center; font-size: 48px; color: #4caf50; margin: 20px 0; }
-        .button { display: inline-block; background: #4caf50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin: 10px 0; }
-        .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>✅ Tâche Terminée</h1>
-            <p>Félicitations!</p>
-        </div>
-        
-        <div class="content">
-            <h2>Bonjour {{user_name}},</h2>
-            
-            <div class="success-icon">🎉</div>
-            
-            <p>Excellente nouvelle! La tâche suivante a été marquée comme terminée:</p>
-            
-            <div class="task-details">
-                <h3>Détails de la tâche</h3>
-                <p><strong>Description:</strong> {{ task.action_description }}</p>
-                <p><strong>Client:</strong> {{ task.customer }}</p>
-                <p><strong>Responsable:</strong> {{ task.responsible }}</p>
-                {% if task.deadline %}
-                <p><strong>Échéance:</strong> {{ task.deadline.strftime('%d/%m/%Y') }}</p>
-                {% endif %}
-                <p><strong>Date de completion:</strong> {{ task.updated_at.strftime('%d/%m/%Y à %H:%M') }}</p>
-            </div>
-            
-            <p>Merci pour votre excellent travail!</p>
-            
-            <a href="{{ task_url }}" class="button">Voir la Tâche</a>
-        </div>
-        
-        <div class="footer">
-            <p>© {{ current_year }} {{ company_name }}. Tous droits réservés.</p>
-            <p>Ceci est un email automatique, merci de ne pas répondre.</p>
-        </div>
-    </div>
-</body>
-</html>
-        """
-        
-        return render_template_string(template, **context)
-    
-    def _render_task_update_template(self, context: Dict) -> str:
-        """Render task update email template"""
-        template = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mise à jour de tâche</title>
-    <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: linear-gradient(135deg, #2196f3, #1976d2); color: white; padding: 20px; text-align: center; }
-        .content { background: #f9f9f9; padding: 20px; }
-        .task-details { background: white; border-left: 4px solid #2196f3; padding: 15px; margin: 15px 0; }
-        .button { display: inline-block; background: #2196f3; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin: 10px 0; }
-        .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>📝 Mise à Jour de Tâche</h1>
-            <p>Système de Gestion des Plans d'Action</p>
-        </div>
-        
-        <div class="content">
-            <h2>Bonjour {{user_name}},</h2>
-            <p>Une tâche qui vous concerne a été mise à jour:</p>
-            
-            <div class="task-details">
-                <h3>Détails de la tâche</h3>
-                <p><strong>Description:</strong> {{ task.action_description }}</p>
-                <p><strong>Client:</strong> {{ task.customer }}</p>
-                <p><strong>Statut:</strong> {{ task.status }}</p>
-                <p><strong>Responsable:</strong> {{ task.responsible }}</p>
-                {% if task.deadline %}
-                <p><strong>Échéance:</strong> {{ task.deadline.strftime('%d/%m/%Y') }}</p>
-                {% endif %}
-                <p><strong>Dernière mise à jour:</strong> {{ task.updated_at.strftime('%d/%m/%Y à %H:%M') }}</p>
-            </div>
-            
-            <a href="{{ task_url }}" class="button">Voir la Tâche</a>
-        </div>
-        
-        <div class="footer">
-            <p>© {{ current_year }} {{ company_name }}. Tous droits réservés.</p>
-            <p>Ceci est un email automatique, merci de ne pas répondre.</p>
-        </div>
-    </div>
-</body>
-</html>
-        """
-        
-        return render_template_string(template, **context)
-    
-    def send_weekly_report(self, users: List[User]) -> bool:
-        """Send weekly report to users"""
         try:
-            # Get week's statistics
-            week_start = datetime.utcnow() - timedelta(days=7)
+            # Validate message
+            self._validate_message(message)
             
-            # Calculate statistics
-            stats = {
-                'tasks_created': Task.query.filter(Task.created_at >= week_start).count(),
-                'tasks_completed': Task.query.filter(
-                    Task.updated_at >= week_start,
-                    Task.status == 'Terminé'
-                ).count(),
-                'tasks_overdue': Task.query.filter(
-                    Task.deadline < datetime.utcnow(),
-                    Task.status.notin_(['Terminé', 'Annulé'])
-                ).count()
+            # Create MIME message
+            mime_msg = self._create_mime_message(message)
+            
+            # Send via SMTP
+            result = self._send_via_smtp(mime_msg, message)
+            
+            # Log successful delivery
+            self._log_email(message, 'sent', None, start_time)
+            
+            return {
+                'success': True,
+                'message_id': result.get('message_id'),
+                'sent_at': datetime.utcnow()
             }
             
-            # Get top performers
-            from sqlalchemy import func
-            top_performers = db.session.query(
-                Task.responsible,
-                func.count(Task.id).label('completed_count')
-            ).filter(
-                Task.updated_at >= week_start,
-                Task.status == 'Terminé'
-            ).group_by(Task.responsible).order_by(
-                func.count(Task.id).desc()
-            ).limit(3).all()
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Email delivery failed: {error_msg}")
             
-            subject = f"Rapport Hebdomadaire - Semaine du {week_start.strftime('%d/%m/%Y')}"
+            # Log failed delivery
+            self._log_email(message, 'failed', error_msg, start_time)
             
-            success_count = 0
-            for user in users:
-                if user.email and 'manager' in user.roles or 'admin' in user.roles:
-                    html_body = self._render_weekly_report_template({
-                        'user': user,
-                        'stats': stats,
-                        'top_performers': top_performers,
-                        'week_start': week_start,
-                        'company_name': 'TechMac',
-                        'current_year': datetime.now().year,
-                        'base_url': current_app.config.get('FRONTEND_URL', 'http://localhost:3000')
-                    })
+            return {
+                'success': False,
+                'error': error_msg,
+                'failed_at': datetime.utcnow()
+            }
+            
+    def _validate_message(self, message: EmailMessage) -> None:
+        """Validate email message"""
+        if not message.to:
+            raise ValueError("Recipient email is required")
+            
+        if not message.subject:
+            raise ValueError("Email subject is required")
+            
+        if not message.template and not message.context.get('content'):
+            raise ValueError("Email template or content is required")
+            
+        # Validate email addresses
+        recipients = message.to if isinstance(message.to, list) else [message.to]
+        for email in recipients:
+            if not self._is_valid_email(email):
+                raise ValueError(f"Invalid email address: {email}")
+                
+    def _is_valid_email(self, email: str) -> bool:
+        """Basic email validation"""
+        import re
+        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}
+        return re.match(pattern, email) is not None
+        
+    def _create_mime_message(self, message: EmailMessage) -> MIMEMultipart:
+        """Create MIME message from EmailMessage"""
+        # Create message container
+        mime_msg = MIMEMultipart('alternative')
+        
+        # Set headers
+        mime_msg['From'] = message.from_email or self.default_from
+        mime_msg['Subject'] = message.subject
+        
+        # Handle recipients
+        if isinstance(message.to, list):
+            mime_msg['To'] = ', '.join(message.to)
+        else:
+            mime_msg['To'] = message.to
+            
+        if message.cc:
+            mime_msg['Cc'] = ', '.join(message.cc)
+            
+        # Set priority
+        if message.priority == EmailPriority.HIGH:
+            mime_msg['X-Priority'] = '2'
+            mime_msg['Importance'] = 'High'
+        elif message.priority == EmailPriority.URGENT:
+            mime_msg['X-Priority'] = '1'
+            mime_msg['Importance'] = 'High'
+            
+        # Add message ID for tracking
+        message_id = f"<{hashlib.md5(f'{message.subject}{datetime.utcnow().isoformat()}'.encode()).hexdigest()}@techmac.ma>"
+        mime_msg['Message-ID'] = message_id
+        
+        # Render content
+        template_engine = EmailTemplateEngine()
+        
+        if message.template:
+            rendered = template_engine.render_template(message.template, message.context)
+            
+            # Add text version if available
+            if rendered.get('text'):
+                text_part = MIMEText(rendered['text'], 'plain', 'utf-8')
+                mime_msg.attach(text_part)
+                
+            # Add HTML version
+            if rendered.get('html'):
+                html_part = MIMEText(rendered['html'], 'html', 'utf-8')
+                mime_msg.attach(html_part)
+        else:
+            # Use direct content
+            content = message.context.get('content', '')
+            text_part = MIMEText(content, 'plain', 'utf-8')
+            mime_msg.attach(text_part)
+            
+        # Add attachments
+        if message.attachments:
+            for attachment in message.attachments:
+                self._add_attachment(mime_msg, attachment)
+                
+        return mime_msg
+        
+    def _add_attachment(self, mime_msg: MIMEMultipart, attachment: Dict) -> None:
+        """Add attachment to MIME message"""
+        try:
+            file_path = attachment.get('path')
+            filename = attachment.get('filename') or os.path.basename(file_path)
+            
+            with open(file_path, 'rb') as f:
+                part = MIMEBase('application', 'octet-stream')
+                part.set_payload(f.read())
+                
+            encoders.encode_base64(part)
+            part.add_header(
+                'Content-Disposition',
+                f'attachment; filename= {filename}'
+            )
+            
+            mime_msg.attach(part)
+            
+        except Exception as e:
+            logger.warning(f"Failed to add attachment {attachment}: {str(e)}")
+            
+    def _send_via_smtp(self, mime_msg: MIMEMultipart, message: EmailMessage) -> Dict[str, Any]:
+        """Send email via SMTP"""
+        try:
+            # Create SMTP connection
+            if self.smtp_config['use_ssl']:
+                server = smtplib.SMTP_SSL(self.smtp_config['server'], self.smtp_config['port'])
+            else:
+                server = smtplib.SMTP(self.smtp_config['server'], self.smtp_config['port'])
+                if self.smtp_config['use_tls']:
+                    server.starttls()
                     
-                    if self.send_email(user.email, subject, html_body):
-                        success_count += 1
+            # Login
+            if self.smtp_config['username'] and self.smtp_config['password']:
+                server.login(self.smtp_config['username'], self.smtp_config['password'])
+                
+            # Send message
+            recipients = []
+            if isinstance(message.to, list):
+                recipients.extend(message.to)
+            else:
+                recipients.append(message.to)
+                
+            if message.cc:
+                recipients.extend(message.cc)
+            if message.bcc:
+                recipients.extend(message.bcc)
+                
+            server.send_message(mime_msg, to_addrs=recipients)
+            server.quit()
             
-            logger.info(f"Weekly report sent to {success_count} users")
-            return success_count > 0
+            return {
+                'message_id': mime_msg['Message-ID'],
+                'recipients': recipients
+            }
             
         except Exception as e:
-            logger.error(f"Error sending weekly report: {str(e)}")
-            return False
-    
-    def _render_weekly_report_template(self, context: Dict) -> str:
-        """Render weekly report email template"""
-        template = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rapport Hebdomadaire</title>
-    <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: linear-gradient(135deg, #673ab7, #9c27b0); color: white; padding: 20px; text-align: center; }
-        .content { background: #f9f9f9; padding: 20px; }
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin: 20px 0; }
-        .stat-card { background: white; padding: 15px; text-align: center; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .stat-number { font-size: 24px; font-weight: bold; color: #1976d2; }
-        .stat-label { font-size: 12px; color: #666; text-transform: uppercase; }
-        .performers-list { background: white; padding: 15px; margin: 15px 0; border-radius: 8px; }
-        .performer { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee; }
-        .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>📊 Rapport Hebdomadaire</h1>
-            <p>Semaine du {{ week_start.strftime('%d/%m/%Y') }}</p>
-        </div>
-        
-        <div class="content">
-            <h2>Bonjour {{ user.name }},</h2>
-            <p>Voici le résumé des activités de cette semaine:</p>
+            raise Exception(f"SMTP delivery failed: {str(e)}")
             
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-number">{{ stats.tasks_created }}</div>
-                    <div class="stat-label">Tâches Créées</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number">{{ stats.tasks_completed }}</div>
-                    <div class="stat-label">Tâches Terminées</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number">{{ stats.tasks_overdue }}</div>
-                    <div class="stat-label">Tâches en Retard</div>
-                </div>
-            </div>
-            
-            {% if top_performers %}
-            <div class="performers-list">
-                <h3>🏆 Top Performers de la Semaine</h3>
-                {% for performer, count in top_performers %}
-                <div class="performer">
-                    <span>{{ performer }}</span>
-                    <strong>{{ count }} tâche{{ 's' if count > 1 else '' }} terminée{{ 's' if count > 1 else '' }}</strong>
-                </div>
-                {% endfor %}
-            </div>
-            {% endif %}
-            
-            <p>Continuez le bon travail!</p>
-            
-            <a href="{{ base_url }}/analytics" style="display: inline-block; background: #673ab7; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin: 10px 0;">Voir le Tableau de Bord</a>
-        </div>
-        
-        <div class="footer">
-            <p>© {{ current_year }} {{ company_name }}. Tous droits réservés.</p>
-            <p>Ceci est un email automatique, merci de ne pas répondre.</p>
-        </div>
-    </div>
-</body>
-</html>
-        """
-        
-        return render_template_string(template, **context)
-
-class NotificationService:
-    """Service for managing notifications"""
-    
-    @staticmethod
-    def check_deadlines_and_notify():
-        """Check for approaching deadlines and send notifications"""
+    def _log_email(self, message: EmailMessage, status: str, error: Optional[str], start_time: datetime) -> None:
+        """Log email delivery attempt"""
         try:
-            email_service = EmailService()
-            warning_days = current_app.config.get('DEADLINE_WARNING_DAYS', 3)
+            duration = (datetime.utcnow() - start_time).total_seconds()
             
-            # Get tasks with approaching deadlines
-            warning_date = datetime.utcnow() + timedelta(days=warning_days)
-            approaching_tasks = Task.query.filter(
-                Task.deadline <= warning_date,
-                Task.deadline >= datetime.utcnow(),
-                Task.status.notin_(['Terminé', 'Annulé'])
-            ).all()
+            email_log = EmailLog(
+                to_email=message.to if isinstance(message.to, str) else ', '.join(message.to),
+                subject=message.subject,
+                template=message.template,
+                status=status,
+                error_message=error,
+                user_id=message.user_id,
+                task_id=message.task_id,
+                email_type=message.email_type,
+                sent_at=datetime.utcnow() if status == 'sent' else None,
+                duration_seconds=duration
+            )
             
-            # Get overdue tasks
-            overdue_tasks = Task.query.filter(
-                Task.deadline < datetime.utcnow(),
-                Task.status.notin_(['Terminé', 'Annulé'])
-            ).all()
-            
-            notification_count = 0
-            
-            # Send deadline warnings
-            for task in approaching_tasks:
-                users_to_notify = User.query.filter(
-                    db.or_(
-                        User.name == task.responsible,
-                        User.roles.contains(['manager']),
-                        User.roles.contains(['admin'])
-                    )
-                ).all()
-                
-                if email_service.send_task_notification(task, 'deadline_reminder', users_to_notify):
-                    notification_count += 1
-            
-            # Send overdue notifications
-            for task in overdue_tasks:
-                users_to_notify = User.query.filter(
-                    db.or_(
-                        User.name == task.responsible,
-                        User.roles.contains(['manager']),
-                        User.roles.contains(['admin'])
-                    )
-                ).all()
-                
-                if email_service.send_task_notification(task, 'task_overdue', users_to_notify):
-                    notification_count += 1
-            
-            logger.info(f"Deadline notifications sent: {notification_count} notifications for {len(approaching_tasks)} approaching and {len(overdue_tasks)} overdue tasks")
+            db.session.add(email_log)
+            db.session.commit()
             
         except Exception as e:
-            logger.error(f"Error checking deadlines and sending notifications: {str(e)}")
-    
-    @staticmethod
-    def schedule_weekly_reports():
-        """Schedule and send weekly reports"""
-        try:
-            # Send weekly reports every Monday
-            if datetime.utcnow().weekday() == 0:  # Monday
-                email_service = EmailService()
-                managers_and_admins = User.query.filter(
-                    db.or_(
-                        User.roles.contains(['manager']),
-                        User.roles.contains(['admin'])
-                    )
-                ).all()
-                
-                email_service.send_weekly_report(managers_and_admins)
-                logger.info("Weekly reports sent")
-                
-        except Exception as e:
-            logger.error(f"Error sending weekly reports: {str(e)}")
+            logger.error(f"Failed to log email: {str(e)}")
 
-# Initialize notification scheduler
-def init_notification_scheduler(app):
-    """Initialize notification scheduler with Flask app context"""
-    try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-        from apscheduler.triggers.cron import CronTrigger
+class EmailQueueManager:
+    """Manage email queue with Redis backend"""
+    
+    def __init__(self):
+        redis_url = current_app.config.get('REDIS_URL', 'redis://localhost:6379')
+        self.redis_client = redis.from_url(redis_url)
+        self.queue_key = 'email_queue'
+        self.processing_key = 'email_processing'
+        self.failed_key = 'email_failed'
         
-        scheduler = BackgroundScheduler()
-        
-        with app.app_context():
-            if app.config.get('ENABLE_EMAIL_NOTIFICATIONS', True):
-                # Check deadlines every hour
-                scheduler.add_job(
-                    func=NotificationService.check_deadlines_and_notify,
-                    trigger=CronTrigger(minute=0),  # Every hour
-                    id='deadline_notifications',
-                    name='Deadline Notifications',
-                    replace_existing=True
+    def add_to_queue(self, message: EmailMessage) -> str:
+        """Add email message to queue"""
+        try:
+            # Generate unique ID
+            message_id = hashlib.md5(
+                f"{message.to}{message.subject}{datetime.utcnow().isoformat()}".encode()
+            ).hexdigest()
+            
+            # Serialize message
+            message_data = {
+                'id': message_id,
+                'message': asdict(message),
+                'created_at': datetime.utcnow().isoformat(),
+                'attempts': 0,
+                'max_attempts': 3
+            }
+            
+            # Add to appropriate queue based on priority and send_at
+            if message.send_at and message.send_at > datetime.utcnow():
+                # Schedule for later
+                score = message.send_at.timestamp()
+                self.redis_client.zadd(f"{self.queue_key}:scheduled", {json.dumps(message_data): score})
+            else:
+                # Add to immediate queue based on priority
+                priority_score = message.priority.value
+                self.redis_client.zadd(self.queue_key, {json.dumps(message_data): priority_score})
+                
+            logger.info(f"Added email to queue: {message_id}")
+            return message_id
+            
+        except Exception as e:
+            logger.error(f"Failed to add email to queue: {str(e)}")
+            raise
+            
+    def get_next_message(self) -> Optional[Dict]:
+        """Get next message from queue"""
+        try:
+            # First check scheduled messages
+            now = datetime.utcnow().timestamp()
+            scheduled = self.redis_client.zrangebyscore(
+                f"{self.queue_key}:scheduled", 
+                0, 
+                now, 
+                start=0, 
+                num=1,
+                withscores=True
+            )
+            
+            if scheduled:
+                message_data, score = scheduled[0]
+                self.redis_client.zrem(f"{self.queue_key}:scheduled", message_data)
+                return json.loads(message_data)
+                
+            # Get highest priority message from main queue
+            result = self.redis_client.zpopmax(self.queue_key)
+            if result:
+                message_data, priority = result
+                return json.loads(message_data)
+                
+            return None
+            
+        except Exception as e:
+            logger.error(f"Failed to get next message: {str(e)}")
+            return None
+            
+    def mark_processing(self, message_data: Dict) -> None:
+        """Mark message as being processed"""
+        try:
+            processing_data = {
+                **message_data,
+                'processing_started': datetime.utcnow().isoformat()
+            }
+            
+            self.redis_client.setex(
+                f"{self.processing_key}:{message_data['id']}", 
+                300,  # 5 minutes timeout
+                json.dumps(processing_data)
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to mark message as processing: {str(e)}")
+            
+    def mark_sent(self, message_id: str) -> None:
+        """Mark message as successfully sent"""
+        try:
+            self.redis_client.delete(f"{self.processing_key}:{message_id}")
+            logger.info(f"Email marked as sent: {message_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to mark message as sent: {str(e)}")
+            
+    def mark_failed(self, message_data: Dict, error: str) -> None:
+        """Mark message as failed and handle retry logic"""
+        try:
+            message_id = message_data['id']
+            attempts = message_data.get('attempts', 0) + 1
+            max_attempts = message_data.get('max_attempts', 3)
+            
+            if attempts < max_attempts:
+                # Retry later
+                message_data['attempts'] = attempts
+                message_data['last_error'] = error
+                
+                # Exponential backoff
+                delay = (2 ** attempts) * 300  # 5, 10, 20 minutes
+                retry_at = datetime.utcnow() + timedelta(seconds=delay)
+                
+                self.redis_client.zadd(
+                    f"{self.queue_key}:scheduled", 
+                    {json.dumps(message_data): retry_at.timestamp()}
                 )
                 
-                # Send weekly reports every Monday at 9 AM
-                scheduler.add_job(
-                    func=NotificationService.schedule_weekly_reports,
-                    trigger=CronTrigger(day_of_week=0, hour=9, minute=0),  # Monday 9 AM
-                    id='weekly_reports',
-                    name='Weekly Reports',
-                    replace_existing=True
-                )
+                logger.info(f"Email scheduled for retry {attempts}/{max_attempts}: {message_id}")
+            else:
+                # Move to failed queue
+                failed_data = {
+                    **message_data,
+                    'failed_at': datetime.utcnow().isoformat(),
+                    'final_error': error
+                }
                 
-                scheduler.start()
-                logger.info("Notification scheduler initialized")
+                self.redis_client.lpush(self.failed_key, json.dumps(failed_data))
+                logger.error(f"Email permanently failed after {attempts} attempts: {message_id}")
                 
-    except Exception as e:
-        logger.error(f"Error initializing notification scheduler: {str(e)}"): center; padding: 20px; color: #666; font-size: 12px; }
-        .priority-high { border-left-color: #f44336; }
-        .priority-medium { border-left-color: #ff9800; }
-        .priority-low { border-left-color: #4caf50; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🎯 Nouvelle Tâche Assignée</h1>
-            <p>Système de Gestion des Plans d'Action</p>
-        </div>
-        
-        <div class="content">
-            <h2>Bonjour {{user_name}},</h2>
-            <p>Une nouvelle tâche vous a été assignée dans le système de gestion des plans d'action.</p>
+            # Remove from processing
+            self.redis_client.delete(f"{self.processing_key}:{message_id}")
             
-            <div class="task-details priority-{{ task.priority.lower() if task.priority else 'medium' }}">
-                <h3>Détails de la tâche</h3>
-                <p><strong>Description:</strong> {{ task.action_description }}</p>
-                <p><strong>Client:</strong> {{ task.customer }}</p>
-                <p><strong>Demandeur:</strong> {{ task.requester }}</p>
-                {% if task.po_number %}
-                <p><strong>PO:</strong> {{ task.po_number }}</p>
-                {% endif %}
-                {% if task.category %}
-                <p><strong>Catégorie:</strong> {{ task.category }}</p>
-                {% endif %}
-                <p><strong>Priorité:</strong> {{ task.priority or 'Moyen' }}</p>
-                {% if task.deadline %}
-                <p><strong>Échéance:</strong> {{ task.deadline.strftime('%d/%m/%Y') }}</p>
-                {% endif %}
-                {% if task.notes %}
-                <p><strong>Notes:</strong> {{ task.notes }}</p>
-                {% endif %}
-            </div>
+        except Exception as e:
+            logger.error(f"Failed to mark message as failed: {str(e)}")
             
-            <p>Veuillez consulter la tâche et prendre les mesures nécessaires.</p>
+    def get_queue_stats(self) -> Dict[str, int]:
+        """Get queue statistics"""
+        try:
+            return {
+                'queued': self.redis_client.zcard(self.queue_key),
+                'scheduled': self.redis_client.zcard(f"{self.queue_key}:scheduled"),
+                'processing': len(self.redis_client.keys(f"{self.processing_key}:*")),
+                'failed': self.redis_client.llen(self.failed_key)
+            }
             
-            <a href="{{ task_url }}" class="button">Voir la Tâche</a>
-        </div>
-        
-        <div class="footer">
-            <p>© {{ current_year }} {{ company_name }}. Tous droits réservés.</p>
-            <p>Ceci est un email automatique, merci de ne pas répondre.</p>
-        </div>
-    </div>
-</body>
-</html>
-        """
-        
-        return render_template_string(template, **context)
+        except Exception as e:
+            logger.error(f"Failed to get queue stats: {str(e)}")
+            return {'queued': 0, 'scheduled': 0, 'processing': 0, 'failed': 0}
+
+class EmailWorker:
+    """Background worker for processing email queue"""
     
-    def _render_deadline_reminder_template(self, context: Dict, days_remaining: int) -> str:
-        """Render deadline reminder email template"""
-        urgency_class = "urgent" if days_remaining <= 1 else "warning" if days_remaining <= 3 else "info"
-        context['urgency_class'] = urgency_class
-        context['days_remaining'] = days_remaining
+    def __init__(self):
+        self.queue_manager = EmailQueueManager()
+        self.delivery_service = EmailDeliveryService()
+        self.running = False
+        self.worker_thread = None
         
-        template = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rappel d'échéance</title>
-    <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: linear-gradient(135deg, #ff9800, #f44336); color: white; padding: 20px; text-align: center; }
-        .content { background: #f9f9f9; padding: 20px; }
-        .task-details { background: white; border-left: 4px solid #ff9800; padding: 15px; margin: 15px 0; }
-        .urgent { border-left-color: #f44336; }
-        .warning { border-left-color: #ff9800; }
-        .info { border-left-color: #2196f3; }
-        .countdown { text-align: center; font-size: 24px; font-weight: bold; color: #f44336; margin: 20px 0; }
-        .button { display: inline-block; background: #ff9800; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin: 10px 0; }
-        .footer { text-align
+    def start(self) -> None:
+        """Start the email worker"""
+        if self.running:
+            return
+            
+        self.running = True
+        self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
+        self.worker_thread.start()
+        logger.info("Email worker started")
+        
+    def stop(self) -> None:
+        """Stop the email worker"""
+        self.running = False
+        if self.worker_thread:
+            self.worker_thread.join(timeout=10)
+        logger.info("Email worker stopped")
+        
+    def _worker_loop(self) -> None:
+        """Main worker loop"""
+        while self.running:
+            try:
+                # Get next message
+                message_data = self.queue_manager.get_next_message()
+                
+                if not message_data:
+                    # No messages, sleep briefly
+                    time.sleep(5)
+                    continue
+                    
+                # Mark as processing
+                self.queue_manager.mark_processing(message_data)
+                
+                # Create EmailMessage object
+                message_dict = message_data['message']
+                message = EmailMessage(**message_dict)
+                
+                # Send email
+                result = self.delivery_service.send_email(message)
+                
+                if result['success']:
+                    self.queue_manager.mark_sent(message_data['id'])
+                else:
+                    self.queue_manager.mark_failed(message_data, result['error'])
+                    
+            except Exception as e:
+                logger.error(f"Worker error: {str(e)}")
+                if 'message_data' in locals():
+                    self.queue_manager.mark_failed(message_data, str(e))
+                    
+                # Sleep on error to avoid tight loop
+                time.sleep(30)
+
+class EmailService:
+    """Main email service facade"""
+    
+    def __init__(self):
+        self.queue_manager = EmailQueueManager()
+        self.delivery_service = EmailDeliveryService()
+        self.template_engine = EmailTemplateEngine()
+        self.worker = EmailWorker()
+        
+        # Start worker if configured
+        if current_app.config.get('EMAIL_WORKER_ENABLED', True):
+            self.worker.start()
+            
+    def send_email(self, 
+                   to: Union[str, List[str]], 
+                   subject: str, 
+                   template: str, 
+                   context: Dict[str, Any],
+                   **kwargs) -> str:
+        """Send email (adds to queue)"""
+        
+        message = EmailMessage(
+            to=to,
+            subject=subject,
+            template=template,
+            context=context,
+            **kwargs
+        )
+        
+        return self.queue_manager.add_to_queue(message)
+        
+    def send_immediate(self, 
+                      to: Union[str, List[str]], 
+                      subject: str, 
+                      template: str, 
+                      context: Dict[str, Any],
+                      **kwargs) -> Dict[str, Any]:
+        """Send email immediately (bypasses queue)"""
+        
+        message = EmailMessage(
+            to=to,
+            subject=subject,
+            template=template,
+            context=context,
+            **kwargs
+        )
+        
+        return self.delivery_service.send_email(message)
+        
+    def send_task_notification(self, task: Task, notification_type: str, recipients: List[str]) -> str:
+        """Send task-related notification"""
+        
+        context = {
+            'task': task,
+            'notification_type': notification_type,
+            'task_url': f"{current_app.config.get('APP_URL', 'http://localhost:3000')}/tasks/{task.id}"
+        }
+        
+        subject_templates = {
+            'created': f"[Action Plan] Nouvelle tâche créée: {task.po_number or task.action_description[:50]}",
+            'updated': f"[Action Plan] Tâche mise à jour: {task.po_number or task.action_description[:50]}",
+            'completed': f"[Action Plan] Tâche terminée: {task.po_number or task.action_description[:50]}",
+            'overdue': f"[Action Plan] Tâche en retard: {task.po_number or task.action_description[:50]}",
+            'deadline_reminder': f"[Action Plan] Rappel d'échéance: {task.po_number or task.action_description[:50]}"
+        }
+        
+        return self.send_email(
+            to=recipients,
+            subject=subject_templates.get(notification_type, f"[Action Plan] Notification: {task.po_number}"),
+            template=f'task_{notification_type}.html',
+            context=context,
+            task_id=str(task.id),
+            email_type='task_notification'
+        )
+        
+    def send_weekly_report(self, user: User, report_data: Dict[str, Any]) -> str:
+        """Send weekly report email"""
+        
+        context = {
+            'user': user,
+            'report_data': report_data,
+            'week_start': report_data.get('week_start'),
+            'week_end': report_data.get('week_end')
+        }
+        
+        return self.send_email(
+            to=user.email,
+            subject=f"[Action Plan] Rapport hebdomadaire - {report_data.get('week_start', '').strftime('%d/%m/%Y')}",
+            template='weekly_report.html',
+            context=context,
+            user_id=str(user.id),
+            email_type='weekly_report',
+            priority=EmailPriority.NORMAL
+        )
+        
+    def send_sync_notification(self, user_id: str, sync_type: str, result: Dict[str, Any]) -> str:
+        """Send synchronization notification"""
+        
+        user = User.query.get(user_id)
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+            
+        context = {
+            'user': user,
+            'sync_type': sync_type,
+            'result': result,
+            'success': result.get('success', False)
+        }
+        
+        subject = f"[Action Plan] Synchronisation {sync_type} - {'Réussie' if result.get('success') else 'Échouée'}"
+        
+        return self.send_email(
+            to=user.email,
+            subject=subject,
+            template='sync_notification.html',
+            context=context,
+            user_id=user_id,
+            email_type='sync_notification',
+            priority=EmailPriority.HIGH if not result.get('success') else EmailPriority.NORMAL
+        )
+        
+    def get_queue_stats(self) -> Dict[str, Any]:
+        """Get email queue statistics"""
+        return self.queue_manager.get_queue_stats()
+        
+    def get_email_stats(self, days: int = 7) -> Dict[str, Any]:
+        """Get email delivery statistics"""
+        try:
+            since_date = datetime.utcnow() - timedelta(days=days)
+            
+            total_sent = EmailLog.query.filter(
+                EmailLog.sent_at >= since_date,
+                EmailLog.status == 'sent'
+            ).count()
+            
+            total_failed = EmailLog.query.filter(
+                EmailLog.sent_at >= since_date,
+                EmailLog.status == 'failed'
+            ).count()
+            
+            avg_duration = db.session.query(
+                db.func.avg(EmailLog.duration_seconds)
+            ).filter(
+                EmailLog.sent_at >= since_date,
+                EmailLog.status == 'sent'
+            ).scalar() or 0
+            
+            # Get stats by email type
+            type_stats = db.session.query(
+                EmailLog.email_type,
+                db.func.count(EmailLog.id)
+            ).filter(
+                EmailLog.sent_at >= since_date
+            ).group_by(EmailLog.email_type).all()
+            
+            return {
+                'total_sent': total_sent,
+                'total_failed': total_failed,
+                'success_rate': (total_sent / (total_sent + total_failed) * 100) if (total_sent + total_failed) > 0 else 0,
+                'avg_duration_seconds': round(avg_duration, 2),
+                'by_type': dict(type_stats),
+                'queue_stats': self.get_queue_stats()
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get email stats: {str(e)}")
+            return {
+                'total_sent': 0,
+                'total_failed': 0,
+                'success_rate': 0,
+                'avg_duration_seconds': 0,
+                'by_type': {},
+                'queue_stats': self.get_queue_stats()
+            }
+
+# Global service instance
+_email_service = None
+
+def get_email_service() -> EmailService:
+    """Get email service singleton"""
+    global _email_service
+    if _email_service is None:
+        _email_service = EmailService()
+    return _email_service
+
+# Convenience functions
+def send_email(to: Union[str, List[str]], subject: str, template: str, context: Dict[str, Any], **kwargs) -> str:
+    """Send email via service"""
+    return get_email_service().send_email(to, subject, template, context, **kwargs)
+
+def send_task_notification(task: Task, notification_type: str, recipients: List[str]) -> str:
+    """Send task notification"""
+    return get_email_service().send_task_notification(task, notification_type, recipients)
+
+def send_weekly_report(user: User, report_data: Dict[str, Any]) -> str:
+    """Send weekly report"""
+    return get_email_service().send_weekly_report(user, report_data)
