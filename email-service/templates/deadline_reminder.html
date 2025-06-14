@@ -1,0 +1,110 @@
+<!-- ===================================================================
+     email-service/templates/deadline_reminder.html - Deadline Reminder Template
+     =================================================================== -->
+
+{% extends "base.html" %}
+
+{% block title %}Rappel d'échéance - {{ system_name }}{% endblock %}
+
+{% block header %}
+<h1>⏰ Rappel d'Échéance</h1>
+<p>{{ company_name }} - {{ system_name }}</p>
+{% endblock %}
+
+{% block content %}
+<h2>Bonjour {{ user_name }},</h2>
+
+<p>Une tâche qui vous est assignée nécessite votre attention urgente.</p>
+
+<!-- Deadline Alert Badge -->
+<div style="text-align: center; margin: 25px 0;">
+    <div style="background: {% if days_remaining <= 0 %}#dc3545{% elif days_remaining <= 1 %}#fd7e14{% elif days_remaining <= 3 %}#ffc107{% else %}#17a2b8{% endif %}; 
+                color: white; padding: 20px 30px; border-radius: 50px; display: inline-block; 
+                font-size: 20px; font-weight: bold; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
+        {% if days_remaining <= 0 %}
+            🚨 ÉCHÉANCE DÉPASSÉE
+        {% elif days_remaining == 1 %}
+            ⚠️ ÉCHÉANCE AUJOURD'HUI
+        {% elif days_remaining == 2 %}
+            📅 ÉCHÉANCE DEMAIN
+        {% else %}
+            📅 {{ days_remaining }} JOURS RESTANTS
+        {% endif %}
+    </div>
+</div>
+
+<!-- Task Details -->
+<div class="task-details {% if task.priority %}priority-{{ task.priority.lower() }}{% endif %}">
+    <h3>📋 Détails de la tâche</h3>
+    <p><strong>Description :</strong> {{ task.action_description }}</p>
+    <p><strong>Client :</strong> {{ task.customer }}</p>
+    <p><strong>Demandeur :</strong> {{ task.requester }}</p>
+    {% if task.po_number %}<p><strong>N° PO :</strong> {{ task.po_number }}</p>{% endif %}
+    {% if task.category %}<p><strong>Catégorie :</strong> {{ task.category }}</p>{% endif %}
+    <p><strong>Statut Actuel :</strong> <span class="status-{% if task.status %}{{ task.status.lower().replace(' ', '-') }}{% else %}pending{% endif %}">{{ task.status or 'En attente' }}</span></p>
+    {% if task.deadline %}<p><strong>Échéance :</strong> <span style="font-weight: bold; color: {% if days_remaining <= 0 %}#dc3545{% elif days_remaining <= 3 %}#ffc107{% else %}#28a745{% endif %};">{{ task.deadline }}</span></p>{% endif %}
+    {% if task.priority %}<p><strong>Priorité :</strong> <span style="color: {% if task.priority.lower() == 'high' %}#dc3545{% elif task.priority.lower() == 'medium' %}#ffc107{% else %}#28a745{% endif %};">{{ task.priority }}</span></p>{% endif %}
+    {% if task.notes %}<p><strong>Notes :</strong> {{ task.notes }}</p>{% endif %}
+</div>
+
+<!-- Action Required Section -->
+{% if days_remaining <= 0 %}
+<div style="background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; padding: 20px; border-radius: 8px; margin: 20px 0;">
+    <h3 style="color: #721c24; margin: 0 0 10px 0;">🚨 Action Urgente Requise</h3>
+    <p style="margin: 0;">Cette tâche est en retard. Veuillez :</p>
+    <ul style="margin: 10px 0 0 20px;">
+        <li>Mettre à jour le statut si la tâche est terminée</li>
+        <li>Fournir une estimation révisée si nécessaire</li>
+        <li>Contacter votre manager en cas de problème</li>
+    </ul>
+</div>
+{% elif days_remaining <= 3 %}
+<div style="background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 20px; border-radius: 8px; margin: 20px 0;">
+    <h3 style="color: #856404; margin: 0 0 10px 0;">⚠️ Attention Requise</h3>
+    <p style="margin: 0;">L'échéance approche rapidement. Assurez-vous de :</p>
+    <ul style="margin: 10px 0 0 20px;">
+        <li>Finaliser les travaux en cours</li>
+        <li>Communiquer tout obstacle potentiel</li>
+        <li>Préparer la livraison si applicable</li>
+    </ul>
+</div>
+{% else %}
+<div style="background: #d1ecf1; border: 1px solid #bee5eb; color: #0c5460; padding: 20px; border-radius: 8px; margin: 20px 0;">
+    <h3 style="color: #0c5460; margin: 0 0 10px 0;">📋 Planification</h3>
+    <p style="margin: 0;">Vous avez encore du temps, mais pensez à :</p>
+    <ul style="margin: 10px 0 0 20px;">
+        <li>Organiser votre planning</li>
+        <li>Identifier les ressources nécessaires</li>
+        <li>Communiquer les dépendances éventuelles</li>
+    </ul>
+</div>
+{% endif %}
+
+<!-- Action Buttons -->
+<div style="text-align: center; margin: 30px 0;">
+    <a href="{{ base_url }}/tasks/{{ task.id }}" class="email-button" style="margin-right: 10px;">
+        Voir la Tâche
+    </a>
+    <a href="{{ base_url }}/tasks/{{ task.id }}/update" class="email-button" style="background: #28a745;">
+        Mettre à Jour
+    </a>
+</div>
+
+<!-- Contact Information -->
+<div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0; text-align: center;">
+    <p style="margin: 0; font-size: 14px; color: #666;">
+        <strong>Besoin d'aide ?</strong><br>
+        Contactez votre manager ou l'équipe support : {{ support_email }}
+    </p>
+</div>
+
+<!-- Performance Tip -->
+{% if days_remaining > 0 %}
+<div style="border-left: 4px solid #17a2b8; background: #d1ecf1; padding: 15px; margin: 20px 0;">
+    <p style="margin: 0; font-size: 14px; color: #0c5460;">
+        💡 <strong>Conseil :</strong> Une bonne gestion du temps améliore la satisfaction client et l'efficacité de l'équipe.
+    </p>
+</div>
+{% endif %}
+
+{% endblock %}

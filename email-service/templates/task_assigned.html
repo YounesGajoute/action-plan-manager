@@ -1,0 +1,189 @@
+<!-- ===================================================================
+     email-service/templates/task_assigned.html - Task Assignment Template
+     =================================================================== -->
+
+{% extends "base.html" %}
+
+{% block title %}Nouvelle tâche assignée - {{ system_name }}{% endblock %}
+
+{% block header %}
+<h1>🎯 Nouvelle Tâche Assignée</h1>
+<p>{{ company_name }} - {{ system_name }}</p>
+{% endblock %}
+
+{% block content %}
+<h2>Bonjour {{ user_name }},</h2>
+
+<p>Une nouvelle tâche vous a été assignée dans le système de gestion des plans d'action TechMac.</p>
+
+<!-- Welcome Message for New Tasks -->
+<div style="background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%); 
+            padding: 20px; border-radius: 10px; margin: 20px 0; text-align: center;">
+    <div style="font-size: 48px; margin-bottom: 10px;">🚀</div>
+    <h3 style="margin: 0; color: #1976d2;">Nouvelle Mission</h3>
+    <p style="margin: 5px 0 0 0; color: #666;">Votre expertise est requise</p>
+</div>
+
+<!-- Task Details -->
+<div class="task-details {% if task.priority %}priority-{{ task.priority.lower() }}{% endif %}">
+    <h3>📋 Détails de la tâche</h3>
+    
+    <div style="display: grid; grid-template-columns: auto 1fr; gap: 8px 15px; align-items: start;">
+        <strong>Description :</strong>
+        <span>{{ task.action_description }}</span>
+        
+        <strong>Client :</strong>
+        <span style="color: #1976d2; font-weight: 600;">{{ task.customer }}</span>
+        
+        <strong>Demandeur :</strong>
+        <span>{{ task.requester }}</span>
+        
+        {% if task.po_number %}
+        <strong>N° PO :</strong>
+        <span style="font-family: monospace; background: #f8f9fa; padding: 2px 6px; border-radius: 3px;">{{ task.po_number }}</span>
+        {% endif %}
+        
+        {% if task.category %}
+        <strong>Catégorie :</strong>
+        <span style="background: 
+            {% if task.category.lower() == 'installation' %}#e8f5e8
+            {% elif task.category.lower() == 'réparation' %}#fff3cd
+            {% elif task.category.lower() == 'développement' %}#d1ecf1
+            {% elif task.category.lower() == 'livraison' %}#f8d7da
+            {% elif task.category.lower() == 'commercial' %}#e2e3e5
+            {% else %}#f8f9fa{% endif %}; 
+            padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600;">
+            {{ task.category }}
+        </span>
+        {% endif %}
+        
+        {% if task.priority %}
+        <strong>Priorité :</strong>
+        <span style="color: 
+            {% if task.priority.lower() == 'high' %}#dc3545
+            {% elif task.priority.lower() == 'medium' %}#ffc107
+            {% else %}#28a745{% endif %}; font-weight: 600;">
+            {{ task.priority }}
+            {% if task.priority.lower() == 'high' %}🔴
+            {% elif task.priority.lower() == 'medium' %}🟡
+            {% else %}🟢{% endif %}
+        </span>
+        {% endif %}
+        
+        {% if task.deadline %}
+        <strong>Échéance :</strong>
+        <span style="font-weight: 600; color: 
+            {% set deadline_days = (task.deadline_date - today_date).days if task.deadline_date and today_date else 999 %}
+            {% if deadline_days <= 0 %}#dc3545
+            {% elif deadline_days <= 3 %}#ffc107
+            {% else %}#28a745{% endif %};">
+            {{ task.deadline }}
+            {% if deadline_days <= 0 %}⚠️
+            {% elif deadline_days <= 7 %}📅
+            {% else %}✅{% endif %}
+        </span>
+        {% endif %}
+        
+        {% if task.status %}
+        <strong>Statut :</strong>
+        <span class="status-{{ task.status.lower().replace(' ', '-') }}">{{ task.status }}</span>
+        {% endif %}
+    </div>
+    
+    {% if task.notes %}
+    <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #dee2e6;">
+        <strong>Notes :</strong>
+        <div style="background: #f8f9fa; padding: 10px; border-radius: 5px; margin-top: 5px; font-style: italic;">
+            {{ task.notes }}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Assignment Context -->
+{% if assigned_by %}
+<div style="background: #e9ecef; padding: 15px; border-radius: 8px; margin: 20px 0;">
+    <p style="margin: 0; font-size: 14px;">
+        <strong>Assigné par :</strong> {{ assigned_by }}<br>
+        <strong>Date d'assignation :</strong> {{ assignment_date or 'Aujourd\'hui' }}
+    </p>
+</div>
+{% endif %}
+
+<!-- Quick Actions -->
+<div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+    <h4 style="margin: 0 0 15px 0; color: #1976d2;">🔧 Actions Rapides</h4>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+        <a href="{{ base_url }}/tasks/{{ task.id }}" class="email-button" style="margin: 0; text-align: center; display: block;">
+            📄 Voir Détails
+        </a>
+        <a href="{{ base_url }}/tasks/{{ task.id }}/accept" class="email-button" style="margin: 0; background: #28a745; text-align: center; display: block;">
+            ✅ Accepter
+        </a>
+        <a href="{{ base_url }}/tasks/{{ task.id }}/update" class="email-button" style="margin: 0; background: #17a2b8; text-align: center; display: block;">
+            📝 Mettre à Jour
+        </a>
+    </div>
+</div>
+
+<!-- Category-Specific Guidelines -->
+{% if task.category %}
+<div style="border-left: 4px solid #17a2b8; background: #d1ecf1; padding: 15px; margin: 20px 0;">
+    <h4 style="margin: 0 0 10px 0; color: #0c5460;">
+        {% if task.category.lower() == 'installation' %}🔧 Guidelines Installation
+        {% elif task.category.lower() == 'réparation' %}🛠️ Guidelines Réparation
+        {% elif task.category.lower() == 'développement' %}💻 Guidelines Développement
+        {% elif task.category.lower() == 'livraison' %}📦 Guidelines Livraison
+        {% elif task.category.lower() == 'commercial' %}💼 Guidelines Commercial
+        {% else %}📋 Guidelines Générales{% endif %}
+    </h4>
+    <ul style="margin: 0; padding-left: 20px; color: #0c5460;">
+        {% if task.category.lower() == 'installation' %}
+            <li>Vérifier la disponibilité des équipements</li>
+            <li>Confirmer l'accès au site avec le client</li>
+            <li>Préparer la documentation technique</li>
+        {% elif task.category.lower() == 'réparation' %}
+            <li>Diagnostiquer le problème en priorité</li>
+            <li>Vérifier la disponibilité des pièces</li>
+            <li>Estimer le temps de réparation</li>
+        {% elif task.category.lower() == 'développement' %}
+            <li>Analyser les spécifications techniques</li>
+            <li>Définir l'architecture solution</li>
+            <li>Planifier les phases de développement</li>
+        {% elif task.category.lower() == 'livraison' %}
+            <li>Vérifier la préparation des articles</li>
+            <li>Coordonner avec la logistique</li>
+            <li>Confirmer les délais avec le client</li>
+        {% elif task.category.lower() == 'commercial' %}
+            <li>Préparer la documentation commerciale</li>
+            <li>Analyser les besoins du client</li>
+            <li>Définir la stratégie de proposition</li>
+        {% else %}
+            <li>Lire attentivement la description</li>
+            <li>Identifier les ressources nécessaires</li>
+            <li>Communiquer les dépendances</li>
+        {% endif %}
+    </ul>
+</div>
+{% endif %}
+
+<!-- Contact Information -->
+<div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0; text-align: center;">
+    <p style="margin: 0; font-size: 14px; color: #666;">
+        <strong>Questions ou problèmes ?</strong><br>
+        Contactez votre manager ou l'équipe support : <a href="mailto:{{ support_email }}">{{ support_email }}</a><br>
+        Ou consultez le <a href="{{ base_url }}/help">centre d'aide</a>
+    </p>
+</div>
+
+<!-- Motivation Message -->
+<div style="text-align: center; margin: 20px 0; padding: 15px; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border-radius: 10px;">
+    <p style="margin: 0; font-size: 16px; color: #495057; font-style: italic;">
+        "L'excellence n'est jamais un accident. Elle est toujours le résultat d'intentions élevées, d'efforts sincères et d'exécution intelligente."
+    </p>
+    <p style="margin: 5px 0 0 0; font-size: 14px; color: #6c757d;">
+        Bonne chance avec votre nouvelle mission ! 💪
+    </p>
+</div>
+
+{% endblock %}

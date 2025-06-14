@@ -1,0 +1,192 @@
+<!-- ===================================================================
+     email-service/templates/task_completed.html - Task Completion Template
+     =================================================================== -->
+
+{% extends "base.html" %}
+
+{% block title %}Tâche terminée - {{ system_name }}{% endblock %}
+
+{% block header %}
+<h1>✅ Tâche Terminée</h1>
+<p>{{ company_name }} - {{ system_name }}</p>
+{% endblock %}
+
+{% block content %}
+<h2>Bonjour {{ user_name }},</h2>
+
+<!-- Celebration Header -->
+<div style="background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); 
+            padding: 30px; border-radius: 15px; margin: 20px 0; text-align: center;">
+    <div style="font-size: 64px; margin-bottom: 15px;">🎉</div>
+    <h3 style="margin: 0; color: #155724; font-size: 24px;">Félicitations !</h3>
+    <p style="margin: 10px 0 0 0; color: #155724; font-size: 16px;">Une tâche a été marquée comme terminée</p>
+</div>
+
+<p>Excellente nouvelle ! La tâche suivante a été marquée comme <strong style="color: #28a745;">terminée</strong> avec succès.</p>
+
+<!-- Completed Task Details -->
+<div class="task-details" style="border-left-color: #28a745; background: #f8fff8;">
+    <h3 style="color: #28a745;">📋 Tâche Accomplie</h3>
+    
+    <div style="display: grid; grid-template-columns: auto 1fr; gap: 8px 15px; align-items: start;">
+        <strong>Description :</strong>
+        <span>{{ task.action_description }}</span>
+        
+        <strong>Client :</strong>
+        <span style="color: #1976d2; font-weight: 600;">{{ task.customer }}</span>
+        
+        <strong>Responsable :</strong>
+        <span style="color: #28a745; font-weight: 600;">{{ task.responsible }}</span>
+        
+        {% if task.po_number %}
+        <strong>N° PO :</strong>
+        <span style="font-family: monospace; background: #e8f5e8; padding: 2px 6px; border-radius: 3px;">{{ task.po_number }}</span>
+        {% endif %}
+        
+        {% if task.category %}
+        <strong>Catégorie :</strong>
+        <span style="background: #e8f5e8; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600;">
+            {{ task.category }}
+        </span>
+        {% endif %}
+        
+        {% if task.deadline %}
+        <strong>Échéance :</strong>
+        <span style="{% if completion_date and task.deadline_date and completion_date <= task.deadline_date %}color: #28a745; font-weight: 600;{% else %}color: #856404;{% endif %}">
+            {{ task.deadline }}
+            {% if completion_date and task.deadline_date and completion_date <= task.deadline_date %}✅ (Dans les temps)
+            {% elif completion_date and task.deadline_date and completion_date > task.deadline_date %}⏰ (Retard récupéré)
+            {% endif %}
+        </span>
+        {% endif %}
+        
+        <strong>Date de completion :</strong>
+        <span style="color: #28a745; font-weight: 600;">{{ completion_date }}</span>
+        
+        {% if completion_time %}
+        <strong>Temps de réalisation :</strong>
+        <span>{{ completion_time }}</span>
+        {% endif %}
+        
+        {% if task.notes %}
+        <strong>Notes finales :</strong>
+        <span style="font-style: italic;">{{ task.notes }}</span>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Performance Metrics -->
+{% if performance_metrics %}
+<div style="background: #f8f9fa; padding: 20px; border-radius: 10px; margin: 20px 0;">
+    <h4 style="margin: 0 0 15px 0; color: #1976d2;">📊 Performance</h4>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px;">
+        {% if performance_metrics.on_time %}
+        <div style="background: #d4edda; padding: 15px; text-align: center; border-radius: 8px;">
+            <div style="font-size: 20px; font-weight: bold; color: #155724;">✅</div>
+            <div style="font-size: 12px; color: #155724; margin-top: 5px;">Dans les Temps</div>
+        </div>
+        {% endif %}
+        
+        {% if performance_metrics.quality_score %}
+        <div style="background: #d1ecf1; padding: 15px; text-align: center; border-radius: 8px;">
+            <div style="font-size: 20px; font-weight: bold; color: #0c5460;">{{ performance_metrics.quality_score }}/10</div>
+            <div style="font-size: 12px; color: #0c5460; margin-top: 5px;">Qualité</div>
+        </div>
+        {% endif %}
+        
+        {% if performance_metrics.efficiency %}
+        <div style="background: #fff3cd; padding: 15px; text-align: center; border-radius: 8px;">
+            <div style="font-size: 20px; font-weight: bold; color: #856404;">{{ performance_metrics.efficiency }}%</div>
+            <div style="font-size: 12px; color: #856404; margin-top: 5px;">Efficacité</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Recognition Section -->
+<div style="background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%); 
+            padding: 20px; border-radius: 10px; margin: 20px 0; text-align: center;">
+    <div style="font-size: 32px; margin-bottom: 10px;">🏆</div>
+    <h4 style="margin: 0 0 10px 0; color: #856404;">Excellent Travail !</h4>
+    <p style="margin: 0; color: #856404; font-size: 16px;">
+        Merci pour votre dévouement et votre professionnalisme. 
+        Votre contribution fait la différence ! 👏
+    </p>
+</div>
+
+<!-- Team Impact -->
+{% if team_impact %}
+<div style="border-left: 4px solid #28a745; background: #f8fff8; padding: 15px; margin: 20px 0;">
+    <h4 style="margin: 0 0 10px 0; color: #155724;">🌟 Impact Équipe</h4>
+    <p style="margin: 0; color: #155724;">
+        Cette completion contribue aux objectifs de l'équipe :
+    </p>
+    <ul style="margin: 10px 0 0 20px; color: #155724;">
+        {% if team_impact.tasks_completed_this_week %}
+        <li>{{ team_impact.tasks_completed_this_week }} tâches terminées cette semaine</li>
+        {% endif %}
+        {% if team_impact.client_satisfaction %}
+        <li>Amélioration de la satisfaction client</li>
+        {% endif %}
+        {% if team_impact.project_advancement %}
+        <li>Avancement du projet : {{ team_impact.project_advancement }}%</li>
+        {% endif %}
+    </ul>
+</div>
+{% endif %}
+
+<!-- Action Buttons -->
+<div style="text-align: center; margin: 30px 0;">
+    <a href="{{ base_url }}/tasks/{{ task.id }}" class="email-button" style="margin-right: 10px;">
+        📄 Voir la Tâche
+    </a>
+    <a href="{{ base_url }}/tasks/{{ task.id }}/feedback" class="email-button" style="background: #28a745; margin-right: 10px;">
+        ⭐ Donner un Avis
+    </a>
+    <a href="{{ base_url }}/analytics/personal" class="email-button" style="background: #17a2b8;">
+        📊 Mes Statistiques
+    </a>
+</div>
+
+<!-- Next Steps -->
+<div style="background: #e9ecef; padding: 20px; border-radius: 10px; margin: 20px 0;">
+    <h4 style="margin: 0 0 15px 0; color: #495057;">🚀 Prochaines Étapes</h4>
+    <div style="color: #495057;">
+        <p style="margin: 0 0 10px 0;">Maintenant que cette tâche est terminée :</p>
+        <ul style="margin: 0; padding-left: 20px;">
+            <li>Vérifiez vos nouvelles assignations</li>
+            <li>Mettez à jour vos priorités</li>
+            <li>Partagez vos retours d'expérience</li>
+            <li>Consultez le planning des prochaines tâches</li>
+        </ul>
+    </div>
+    
+    <div style="margin-top: 15px; text-align: center;">
+        <a href="{{ base_url }}/dashboard" class="email-button" style="background: #6c757d;">
+            🏠 Retour au Tableau de Bord
+        </a>
+    </div>
+</div>
+
+<!-- Client Satisfaction Note -->
+{% if task.customer %}
+<div style="background: #d1ecf1; border: 1px solid #bee5eb; padding: 15px; border-radius: 8px; margin: 20px 0;">
+    <p style="margin: 0; font-size: 14px; color: #0c5460;">
+        💡 <strong>Note :</strong> Votre excellent travail pour <strong>{{ task.customer }}</strong> 
+        renforce la relation client et la réputation de TechMac. Continuez ainsi !
+    </p>
+</div>
+{% endif %}
+
+<!-- Motivational Quote -->
+<div style="text-align: center; margin: 20px 0; padding: 20px; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border-radius: 10px;">
+    <p style="margin: 0; font-size: 18px; color: #495057; font-style: italic; font-weight: 300;">
+        "Le succès n'est pas final, l'échec n'est pas fatal : c'est le courage de continuer qui compte."
+    </p>
+    <p style="margin: 10px 0 0 0; font-size: 14px; color: #6c757d;">
+        - Winston Churchill
+    </p>
+</div>
+
+{% endblock %}

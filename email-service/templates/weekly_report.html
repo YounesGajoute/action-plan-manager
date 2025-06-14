@@ -1,0 +1,288 @@
+<!-- ===================================================================
+     email-service/templates/weekly_report.html - Weekly Report Template
+     =================================================================== -->
+
+{% extends "base.html" %}
+
+{% block title %}Rapport Hebdomadaire - {{ system_name }}{% endblock %}
+
+{% block header %}
+<h1>📊 Rapport Hebdomadaire</h1>
+<p>Semaine du {{ week_start }} au {{ week_end or (week_start_date + timedelta(days=6)).strftime('%d/%m/%Y') if week_start_date else '' }}</p>
+{% endblock %}
+
+{% block content %}
+<h2>Bonjour {{ user_name }},</h2>
+
+<p>Voici le résumé complet des activités de cette semaine dans le système de gestion des plans d'action TechMac.</p>
+
+<!-- Key Metrics Overview -->
+<div style="background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); 
+            padding: 25px; border-radius: 15px; margin: 25px 0;">
+    <h3 style="margin: 0 0 20px 0; color: #1976d2; text-align: center;">📈 Vue d'Ensemble</h3>
+    
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 15px;">
+        <!-- Tasks Created -->
+        <div style="background: #e3f2fd; padding: 20px; text-align: center; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+            <div style="font-size: 32px; font-weight: bold; color: #1976d2; margin-bottom: 5px;">
+                {{ stats.tasks_created or 0 }}
+            </div>
+            <div style="font-size: 12px; color: #1976d2; text-transform: uppercase; font-weight: 600;">
+                Tâches Créées
+            </div>
+            <div style="font-size: 10px; color: #666; margin-top: 5px;">
+                {% if previous_week_stats.tasks_created %}
+                    {% set change = stats.tasks_created - previous_week_stats.tasks_created %}
+                    {% if change > 0 %}+{{ change }}{% elif change < 0 %}{{ change }}{% else %}={% endif %} vs semaine précédente
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- Tasks Completed -->
+        <div style="background: #e8f5e8; padding: 20px; text-align: center; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+            <div style="font-size: 32px; font-weight: bold; color: #2e7d32; margin-bottom: 5px;">
+                {{ stats.tasks_completed or 0 }}
+            </div>
+            <div style="font-size: 12px; color: #2e7d32; text-transform: uppercase; font-weight: 600;">
+                Tâches Terminées
+            </div>
+            <div style="font-size: 10px; color: #666; margin-top: 5px;">
+                {% set completion_rate = (stats.tasks_completed / stats.tasks_created * 100) if stats.tasks_created > 0 else 0 %}
+                {{ "%.1f"|format(completion_rate) }}% de taux de completion
+            </div>
+        </div>
+        
+        <!-- Tasks Overdue -->
+        <div style="background: #ffebee; padding: 20px; text-align: center; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+            <div style="font-size: 32px; font-weight: bold; color: #d32f2f; margin-bottom: 5px;">
+                {{ stats.tasks_overdue or 0 }}
+            </div>
+            <div style="font-size: 12px; color: #d32f2f; text-transform: uppercase; font-weight: 600;">
+                Tâches en Retard
+            </div>
+            <div style="font-size: 10px; color: #666; margin-top: 5px;">
+                Nécessitent une attention immédiate
+            </div>
+        </div>
+        
+        <!-- Active Tasks -->
+        <div style="background: #fff3cd; padding: 20px; text-align: center; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+            <div style="font-size: 32px; font-weight: bold; color: #856404; margin-bottom: 5px;">
+                {{ stats.tasks_active or 0 }}
+            </div>
+            <div style="font-size: 12px; color: #856404; text-transform: uppercase; font-weight: 600;">
+                Tâches Actives
+            </div>
+            <div style="font-size: 10px; color: #666; margin-top: 5px;">
+                En cours de traitement
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Category Breakdown -->
+{% if category_stats %}
+<div style="background: white; padding: 20px; margin: 20px 0; border-radius: 10px; border: 1px solid #dee2e6;">
+    <h3 style="margin: 0 0 15px 0; color: #1976d2;">📂 Répartition par Catégorie</h3>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px;">
+        {% for category in category_stats %}
+        <div style="text-align: center; padding: 15px; border-radius: 8px; 
+                    background: {% if category.name.lower() == 'installation' %}#e8f5e8
+                               {% elif category.name.lower() == 'réparation' %}#fff3cd
+                               {% elif category.name.lower() == 'développement' %}#d1ecf1
+                               {% elif category.name.lower() == 'livraison' %}#ffebee
+                               {% elif category.name.lower() == 'commercial' %}#f3e5f5
+                               {% else %}#f8f9fa{% endif %};">
+            <div style="font-weight: bold; font-size: 18px; color: #333;">{{ category.count }}</div>
+            <div style="font-size: 12px; text-transform: uppercase; color: #666;">{{ category.name }}</div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Top Performers -->
+{% if top_performers %}
+<div style="background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%); 
+            padding: 20px; border-radius: 10px; margin: 20px 0;">
+    <h3 style="margin: 0 0 15px 0; color: #856404; text-align: center;">🏆 Top Performers de la Semaine</h3>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+        {% for performer in top_performers[:5] %}
+        <div style="background: rgba(255,255,255,0.7); padding: 15px; border-radius: 8px; text-align: center;">
+            <div style="font-size: 24px; margin-bottom: 5px;">
+                {% if loop.index == 1 %}🥇
+                {% elif loop.index == 2 %}🥈
+                {% elif loop.index == 3 %}🥉
+                {% else %}⭐{% endif %}
+            </div>
+            <div style="font-weight: bold; color: #856404; margin-bottom: 5px;">{{ performer.name }}</div>
+            <div style="font-size: 14px; color: #856404;">
+                {{ performer.completed }} tâche{{ 's' if performer.completed > 1 else '' }} terminée{{ 's' if performer.completed > 1 else '' }}
+            </div>
+            {% if performer.on_time_rate %}
+            <div style="font-size: 12px; color: #666; margin-top: 5px;">
+                {{ performer.on_time_rate }}% dans les temps
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Client Activity -->
+{% if client_stats %}
+<div style="background: white; padding: 20px; margin: 20px 0; border-radius: 10px; border: 1px solid #dee2e6;">
+    <h3 style="margin: 0 0 15px 0; color: #1976d2;">👥 Activité Clients</h3>
+    <div style="max-height: 300px; overflow-y: auto;">
+        {% for client in client_stats[:10] %}
+        <div style="display: flex; justify-content: space-between; align-items: center; 
+                    padding: 10px 0; border-bottom: 1px solid #eee;">
+            <div>
+                <div style="font-weight: 600; color: #333;">{{ client.name }}</div>
+                <div style="font-size: 12px; color: #666;">
+                    {{ client.new_tasks }} nouvelle{{ 's' if client.new_tasks > 1 else '' }} tâche{{ 's' if client.new_tasks > 1 else '' }}
+                </div>
+            </div>
+            <div style="text-align: right;">
+                <div style="font-weight: bold; color: #28a745;">{{ client.completed_tasks }}</div>
+                <div style="font-size: 12px; color: #666;">terminée{{ 's' if client.completed_tasks > 1 else '' }}</div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Weekly Trends -->
+{% if weekly_trends %}
+<div style="background: #f8f9fa; padding: 20px; border-radius: 10px; margin: 20px 0;">
+    <h3 style="margin: 0 0 15px 0; color: #1976d2;">📈 Tendances Hebdomadaires</h3>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px;">
+        {% if weekly_trends.productivity_increase %}
+        <div style="background: white; padding: 15px; border-radius: 8px; text-align: center;">
+            <div style="color: #28a745; font-size: 20px; margin-bottom: 5px;">📈</div>
+            <div style="font-size: 14px; font-weight: 600; color: #28a745;">+{{ weekly_trends.productivity_increase }}%</div>
+            <div style="font-size: 12px; color: #666;">Productivité</div>
+        </div>
+        {% endif %}
+        
+        {% if weekly_trends.average_completion_time %}
+        <div style="background: white; padding: 15px; border-radius: 8px; text-align: center;">
+            <div style="color: #17a2b8; font-size: 20px; margin-bottom: 5px;">⏱️</div>
+            <div style="font-size: 14px; font-weight: 600; color: #17a2b8;">{{ weekly_trends.average_completion_time }}j</div>
+            <div style="font-size: 12px; color: #666;">Temps Moyen</div>
+        </div>
+        {% endif %}
+        
+        {% if weekly_trends.customer_satisfaction %}
+        <div style="background: white; padding: 15px; border-radius: 8px; text-align: center;">
+            <div style="color: #ffc107; font-size: 20px; margin-bottom: 5px;">😊</div>
+            <div style="font-size: 14px; font-weight: 600; color: #ffc107;">{{ weekly_trends.customer_satisfaction }}/10</div>
+            <div style="font-size: 12px; color: #666;">Satisfaction</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Urgent Actions Required -->
+{% if urgent_actions %}
+<div style="background: #f8d7da; border: 1px solid #f5c6cb; padding: 20px; border-radius: 10px; margin: 20px 0;">
+    <h3 style="margin: 0 0 15px 0; color: #721c24;">🚨 Actions Urgentes Requises</h3>
+    <ul style="margin: 0; padding-left: 20px; color: #721c24;">
+        {% for action in urgent_actions %}
+        <li style="margin-bottom: 8px;">{{ action }}</li>
+        {% endfor %}
+    </ul>
+    <div style="margin-top: 15px; text-align: center;">
+        <a href="{{ base_url }}/tasks?filter=overdue" class="email-button" style="background: #dc3545;">
+            🔍 Voir Tâches Urgentes
+        </a>
+    </div>
+</div>
+{% endif %}
+
+<!-- Achievements & Milestones -->
+{% if achievements %}
+<div style="background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); 
+            padding: 20px; border-radius: 10px; margin: 20px 0;">
+    <h3 style="margin: 0 0 15px 0; color: #155724; text-align: center;">🎉 Réalisations de la Semaine</h3>
+    <div style="color: #155724;">
+        {% for achievement in achievements %}
+        <div style="display: flex; align-items: center; margin-bottom: 10px;">
+            <div style="font-size: 20px; margin-right: 10px;">✅</div>
+            <div>{{ achievement }}</div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Team Goals Progress -->
+{% if team_goals %}
+<div style="background: white; padding: 20px; margin: 20px 0; border-radius: 10px; border: 1px solid #dee2e6;">
+    <h3 style="margin: 0 0 15px 0; color: #1976d2;">🎯 Progression des Objectifs Équipe</h3>
+    {% for goal in team_goals %}
+    <div style="margin-bottom: 15px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+            <span style="font-weight: 600; color: #333;">{{ goal.name }}</span>
+            <span style="color: #666;">{{ goal.current }}/{{ goal.target }}</span>
+        </div>
+        <div style="background: #e9ecef; height: 10px; border-radius: 5px; overflow: hidden;">
+            <div style="background: {% if goal.progress >= 100 %}#28a745{% elif goal.progress >= 75 %}#17a2b8{% elif goal.progress >= 50 %}#ffc107{% else %}#dc3545{% endif %}; 
+                        height: 100%; width: {{ goal.progress if goal.progress <= 100 else 100 }}%; transition: width 0.3s ease;"></div>
+        </div>
+        <div style="font-size: 12px; color: #666; margin-top: 2px;">{{ "%.1f"|format(goal.progress) }}% complété</div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- Action Buttons -->
+<div style="text-align: center; margin: 30px 0;">
+    <a href="{{ base_url }}/analytics" class="email-button" style="margin-right: 10px;">
+        📊 Tableau de Bord Complet
+    </a>
+    <a href="{{ base_url }}/reports/weekly" class="email-button" style="background: #28a745; margin-right: 10px;">
+        📋 Rapport Détaillé
+    </a>
+    <a href="{{ base_url }}/tasks" class="email-button" style="background: #17a2b8;">
+        📝 Gérer les Tâches
+    </a>
+</div>
+
+<!-- Next Week Preview -->
+<div style="background: #e9ecef; padding: 20px; border-radius: 10px; margin: 20px 0;">
+    <h3 style="margin: 0 0 15px 0; color: #495057;">🔮 Aperçu Semaine Prochaine</h3>
+    <div style="color: #495057;">
+        {% if next_week_preview %}
+            {% if next_week_preview.upcoming_deadlines %}
+            <p style="margin: 0 0 10px 0;"><strong>Échéances à venir :</strong> {{ next_week_preview.upcoming_deadlines }} tâches</p>
+            {% endif %}
+            {% if next_week_preview.new_projects %}
+            <p style="margin: 0 0 10px 0;"><strong>Nouveaux projets :</strong> {{ next_week_preview.new_projects }}</p>
+            {% endif %}
+            {% if next_week_preview.team_capacity %}
+            <p style="margin: 0 0 10px 0;"><strong>Capacité équipe :</strong> {{ next_week_preview.team_capacity }}% utilisée</p>
+            {% endif %}
+        {% else %}
+        <p style="margin: 0;">Planifiez vos priorités pour la semaine prochaine et maintenez le momentum !</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Motivational Closing -->
+<div style="text-align: center; margin: 25px 0; padding: 25px; 
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border-radius: 15px;">
+    <div style="font-size: 32px; margin-bottom: 15px;">💪</div>
+    <h3 style="margin: 0 0 10px 0; color: #495057;">Continuez l'Excellent Travail !</h3>
+    <p style="margin: 0; font-size: 16px; color: #6c757d; font-style: italic;">
+        Chaque tâche accomplie nous rapproche de nos objectifs. Merci pour votre engagement et votre professionnalisme.
+    </p>
+    <p style="margin: 10px 0 0 0; font-size: 14px; color: #6c757d;">
+        L'équipe TechMac 🚀
+    </p>
+</div>
+
+{% endblock %}
