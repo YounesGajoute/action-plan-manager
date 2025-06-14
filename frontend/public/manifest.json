@@ -1,0 +1,78 @@
+
+{
+  "short_name": "Action Plan",
+  "name": "Action Plan Management System",
+  "description": "Système de gestion des plans d'action TechMac",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "logo192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "logo512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#1976d2",
+  "background_color": "#ffffff",
+  "orientation": "portrait-primary",
+  "categories": ["business", "productivity", "utilities"],
+  "lang": "fr",
+  "dir": "ltr",
+  "scope": "/",
+  "id": "action-plan-management",
+  "prefer_related_applications": false,
+  "screenshots": [
+    {
+      "src": "screenshots/desktop-dashboard.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "platform": "wide",
+      "label": "Dashboard principal"
+    },
+    {
+      "src": "screenshots/mobile-tasks.png",
+      "sizes": "375x667",
+      "type": "image/png",
+      "platform": "narrow",
+      "label": "Gestion des tâches mobile"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Nouvelle Tâche",
+      "short_name": "Nouvelle",
+      "description": "Créer une nouvelle tâche",
+      "url": "/tasks/new",
+      "icons": [
+        {
+          "src": "icons/add-task.png",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "short_name": "Dashboard",
+      "description": "Voir le tableau de bord",
+      "url": "/dashboard",
+      "icons": [
+        {
+          "src": "icons/dashboard.png",
+          "sizes": "96x96"
+        }
+      ]
+    }
+  ]
+}
